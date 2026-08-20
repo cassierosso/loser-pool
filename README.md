@@ -11,7 +11,7 @@ Built to `SPEC.md`, one phase at a time.
 | Phase | Scope | State |
 |---|---|---|
 | 1 | Scaffold, schema + migrations, `LEAGUE_CONFIG`, admin provisioning, seed | **complete** |
-| 2 | Rules engine, auto-assignment, validation, end-of-season logic | not started |
+| 2 | Rules engine, auto-assignment, validation, end-of-season logic | **complete** |
 | 3 | ESPN provider + the four jobs | not started |
 | 4 | Auth and Make Picks | not started |
 | 5 | League Board, Week Results, My Picks History | not started |
@@ -83,6 +83,7 @@ client (§7.6). After `picksFrozenAt`, changes additionally require `--override`
 lib/config/      LEAGUE_CONFIG: the single source of truth for every setting and default
 lib/db/schema/   Drizzle schema, one file per table
 lib/week/        Week identity and ordering (§2.1, §3.1) — pure, no I/O
+lib/rules/       §5 grading, auto-assignment, validation; §6 end of season — pure, no I/O
 lib/admin/       §4 provisioning services
 lib/audit/       The §7 port that Phase 6 implements
 scripts/seed/    Fixture season generator
@@ -120,6 +121,62 @@ Things the spec left open, or that the environment forced. Each is annotated in 
   than having one guessed into the initial one.
 - **America/Chicago** (§11) is a single exported constant, not a `LEAGUE_CONFIG` key, since §0
   does not list it.
+
+## The rules engine (§5, §6)
+
+`lib/rules/` is pure: no I/O, no clock, no randomness. `now` is an input where time
+matters. Database rows are structurally assignable to the engine's types, so Phase 3 can feed
+it query results with no mapping layer — `tests/rules/row-compatibility.test.ts` fails the
+typecheck if that ever stops being true.
+
+| Function | Spec | Does |
+|---|---|---|
+| `gradeWeek` | §5.1 | Grades every selection in a week |
+| `autoAssignWeek` | §5.2 | Resolves alive slots that missed the deadline |
+| `validateSelection` | §5.3 | Server-side submit validation |
+| `evaluateSeasonEnd` | §6 | Decides champion / co-champions / next week / pending admin |
+
+### Decisions taken in Phase 2
+
+- **A week grades whole or not at all.** §5.1 says a postponed game means the week "cannot be
+  graded yet", so `gradeWeek` returns `canGrade: false` with `blockedBy` naming the offending
+  games and both update lists empty. Nothing is half-applied.
+- **Idempotence comes from diffing, not from a flag.** An update is emitted only where the
+  computed outcome differs from what the row already says, and a slot update only where the slot
+  is still alive. A second run over the first run's output returns empty lists and records no
+  audit entry (test 14).
+- **`auto_underdog` uses the worst record among the teams playing** — fewest wins, then most
+  losses, then team id for determinism. v1 has no betting odds by design (§12), so this is a
+  proxy rather than a probability, and it is the one function to replace if the league ever
+  wants real odds. Calling it without standings throws rather than guessing.
+- **"Previous played week" skips voided selections as well as skipped weeks.** §5.2 says to skip
+  "any `skipped` or `void` weeks"; a selection voided by a canceled game is not a decision anyone
+  made, so the lookup reaches further back for a real one.
+- **`validateSelection` takes more than §5.3 lists.** The spec's input list cannot perform the
+  spec's own checks — rejecting a locked week needs the week's status and `lock_at`, and
+  rejecting someone else's slot needs the requesting user. Added: `week`, `requestingUserId`,
+  `user`, `now`.
+- **Validation returns badges on success.** §5.3 requires team reuse and two-slots-one-team to be
+  surfaced but never blocked, so `{ ok: true, info: [...] }` carries them to the UI.
+- **`evaluateSeasonEnd` needs the entrants who were alive *entering* the week**, not just those
+  alive after it — the wipeout rule crowns exactly that set (test 19).
+- **`tieResult` is handled by an exhaustive switch**, so adding a second value to the union is a
+  compile error rather than a silent fall-through to "survived".
+
+## Acceptance tests
+
+Tests 1–21 pass (§13). Coverage by file:
+
+| Tests | Where |
+|---|---|
+| 1, 2, 14, 15, 16 | `tests/rules/grade.test.ts` |
+| 3, 4, 5, 6, 7 (submit) | `tests/rules/validate.test.ts` |
+| 10, 11, 12, 13, 20, 21 | `tests/rules/auto-assign.test.ts` |
+| 17, 18, 19 | `tests/rules/season.test.ts` |
+| 7 (slots), 8, 9 | `tests/provisioning.test.ts` |
+| 20, 21 (ordering) | `tests/week-ordinal.test.ts`, `tests/seed.test.ts` |
+
+Tests 22–30 cover the API and audit log, and arrive with Phases 5 and 6.
 
 ## Deferred deliberately
 
