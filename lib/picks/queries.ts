@@ -51,8 +51,10 @@ export interface MakePicksData {
   teamUsesBySlot: Record<string, Record<string, number>>;
   /**
    * teamId -> how many times this ENTRANT has used that team, across all their
-   * slots. The aggregate screen picks by team rather than by slot, so this is
-   * the badge that means anything there. Informational only (SS5.3).
+   * slots. Not shown on Make Picks -- the league asked for that badge to be
+   * dropped, a deliberate departure from SS9 -- but kept for My Picks History
+   * in Phase 5, and it costs nothing: it is folded from teamUsesBySlot, which
+   * is already loaded.
    */
   seasonTeamUses: Record<string, number>;
   /** teamId -> how many picks are currently on that team this week. */

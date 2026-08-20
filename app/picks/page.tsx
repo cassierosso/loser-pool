@@ -26,7 +26,6 @@ export default async function PicksPage() {
     id: row.id,
     abbreviation: row.abbreviation,
     name: row.displayName,
-    seasonUses: data.seasonTeamUses[row.id] ?? 0,
   });
 
   const matchups: MatchupView[] = data.matchups.map((matchup) => ({

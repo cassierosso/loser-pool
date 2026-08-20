@@ -9,8 +9,6 @@ export interface TeamView {
   id: string;
   abbreviation: string;
   name: string;
-  /** How many times this entrant has used the team this season. Badge only. */
-  seasonUses: number;
 }
 
 export interface MatchupView {
@@ -144,15 +142,21 @@ export function MakePicksForm(props: {
         <div className="flex flex-col gap-4">
           {props.matchups.map((matchup) => (
             <section key={matchup.gameId} className="rounded-xl border border-neutral-800 p-3">
-              <p className="px-1 text-[11px] uppercase tracking-wide text-neutral-500">
-                {matchup.kickoffLabel}
-              </p>
-              <div className="mt-2 flex flex-col gap-2">
+              <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 px-1">
+                {/* Away team first, so who is at whose place stays readable. */}
+                <h3 className="text-sm font-medium text-neutral-200">
+                  {matchup.away.name} <span className="text-neutral-500">vs</span>{" "}
+                  {matchup.home.name}
+                </h3>
+                <p className="text-[11px] uppercase tracking-wide text-neutral-500">
+                  {matchup.kickoffLabel}
+                </p>
+              </header>
+              <div className="mt-2.5 flex flex-col gap-2">
                 {[matchup.away, matchup.home].map((team) => (
                   <TeamRow
                     key={team.id}
                     team={team}
-                    isHome={team.id === matchup.home.id}
                     count={allocation[team.id] ?? 0}
                     canAdd={spare > 0 && !locked && props.canSubmit}
                     disabled={locked || !props.canSubmit}
@@ -209,7 +213,6 @@ function PickBudget(props: { used: number; total: number }) {
 
 function TeamRow(props: {
   team: TeamView;
-  isHome: boolean;
   count: number;
   canAdd: boolean;
   disabled: boolean;
@@ -224,23 +227,12 @@ function TeamRow(props: {
       }`}
     >
       <div className="min-w-0">
-        <p className="truncate text-sm">
-          <span className="font-semibold">{team.abbreviation}</span>{" "}
-          <span className="text-neutral-500">{props.isHome ? "vs" : "at"}</span>{" "}
-          <span className="text-neutral-400">{team.name}</span>
-        </p>
-        <p className="mt-0.5 flex items-center gap-2 text-[11px]">
-          {count > 0 ? (
-            <span className="font-bold text-emerald-300">
-              {count} to LOSE
-            </span>
-          ) : null}
-          {team.seasonUses > 0 ? (
-            <span className="text-neutral-500">
-              used {team.seasonUses}× this season
-            </span>
-          ) : null}
-        </p>
+        {/* The matchup is named in the header above, so the box only needs the
+            team itself -- no abbreviation, no home/away marker. */}
+        <p className="truncate text-sm font-medium">{team.name}</p>
+        {count > 0 ? (
+          <p className="mt-0.5 text-[11px] font-bold text-emerald-300">{count} to LOSE</p>
+        ) : null}
       </div>
 
       <div className="flex shrink-0 items-center gap-1">

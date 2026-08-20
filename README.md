@@ -339,8 +339,13 @@ Other behaviour:
 
 - A live countdown to lock; once it passes, the form says so and refuses to submit.
 - Teams not playing this week are absent, so a team on bye cannot be chosen.
-- A badge shows how many times *you* have used each team this season. Informational only: under
-  `teamReuse: "unlimited"` nothing is blocked, including several picks on one team.
+- Each game is headed by the matchup and its kickoff time — *Green Bay Packers vs New York
+  Giants · SUN, NOV 17, 11:00 AM CST* — with the away team first, so the boxes below need only
+  the team's own name.
+- **No team-usage badge.** §9 asks for one ("how many times this slot has already used each
+  team"); the league asked for it to be dropped as clutter, so this is a deliberate departure.
+  The data is still computed for My Picks History. Nothing is blocked either way: under
+  `teamReuse: "unlimited"` you may stack as many picks on one team as you like.
 - Leave picks spare and the recap says what happens to them at lock — and warns loudly when the
   answer is elimination — computed by the real §5.2 engine so it cannot drift from `lockWeek`.
 
