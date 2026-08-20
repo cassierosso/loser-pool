@@ -1,0 +1,246 @@
+import { and, eq, gt, isNull, sql } from "drizzle-orm";
+
+import type { Database } from "@/lib/db/client";
+import { leagues, loginTokens, sessions, users, type UserRow } from "@/lib/db/schema";
+import type { Mailer } from "@/lib/mail/types";
+
+import {
+  generateToken,
+  hashToken,
+  LOGIN_TOKEN_TTL_MS,
+  MAX_ACTIVE_TOKENS_PER_USER,
+  SESSION_TTL_MS,
+} from "./tokens";
+
+/**
+ * SS10 -- passwordless magic-link authentication.
+ *
+ * No HTTP and no framework in here: the cookie layer sits above this, and every
+ * path below is exercised directly in tests against an in-memory database.
+ */
+
+export interface RequestLinkInput {
+  email: string;
+  /** SS10: users join via the league invite code. Required for a new account. */
+  joinCode?: string;
+  displayName?: string;
+}
+
+export interface RequestLinkDeps {
+  mailer: Mailer;
+  baseUrl: string;
+  now?: Date;
+}
+
+export type RequestLinkResult =
+  | { ok: true; delivered: boolean; created: boolean }
+  | { ok: false; code: "invalid_invite_code" | "rate_limited" | "deactivated" | "name_required"; message: string };
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+async function findUserByEmail(db: Database, email: string): Promise<UserRow | undefined> {
+  const [user] = await db
+    .select()
+    .from(users)
+    .where(eq(sql`lower(${users.email})`, email))
+    .limit(1);
+  return user;
+}
+
+/**
+ * Sends a login link, creating the account first if a valid invite code came
+ * with it.
+ *
+ * Deliberately does NOT reveal whether an address belongs to the league: a
+ * request for an unknown address with no invite code returns ok with
+ * delivered:false, and the UI shows the same message either way. An invite code
+ * that is simply wrong IS reported, because someone typing a code needs to know
+ * they typed it wrong.
+ */
+export async function requestLoginLink(
+  db: Database,
+  input: RequestLinkInput,
+  deps: RequestLinkDeps,
+): Promise<RequestLinkResult> {
+  const now = deps.now ?? new Date();
+  const email = normalizeEmail(input.email);
+
+  if (!email.includes("@")) {
+    return { ok: true, delivered: false, created: false };
+  }
+
+  let user = await findUserByEmail(db, email);
+  let created = false;
+
+  if (!user) {
+    const joinCode = input.joinCode?.trim();
+    if (!joinCode) {
+      // Unknown address, no code: say nothing about who is in the league.
+      return { ok: true, delivered: false, created: false };
+    }
+
+    const [league] = await db.select().from(leagues).limit(1);
+    if (!league || league.joinCode.toLowerCase() !== joinCode.toLowerCase()) {
+      return { ok: false, code: "invalid_invite_code", message: "That invite code is not valid." };
+    }
+
+    const displayName = input.displayName?.trim();
+    if (!displayName) {
+      return { ok: false, code: "name_required", message: "Please enter the name your league knows you by." };
+    }
+
+    const [inserted] = await db
+      .insert(users)
+      .values({
+        email,
+        displayName,
+        role: "player",
+        // SS4: joining gets you an account, not picks. An admin provisions
+        // those once they have seen your money.
+        picksPurchased: 0,
+        paymentStatus: "unpaid",
+      })
+      .returning();
+
+    user = inserted!;
+    created = true;
+  }
+
+  if (user.deactivatedAt) {
+    return { ok: false, code: "deactivated", message: "That account is no longer active." };
+  }
+
+  const [active] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(loginTokens)
+    .where(
+      and(
+        eq(loginTokens.userId, user.id),
+        isNull(loginTokens.consumedAt),
+        gt(loginTokens.expiresAt, now),
+      ),
+    );
+
+  if ((active?.n ?? 0) >= MAX_ACTIVE_TOKENS_PER_USER) {
+    return {
+      ok: false,
+      code: "rate_limited",
+      message: "Too many sign-in links requested. Check your inbox, or try again shortly.",
+    };
+  }
+
+  const raw = generateToken();
+  await db.insert(loginTokens).values({
+    userId: user.id,
+    tokenHash: hashToken(raw),
+    expiresAt: new Date(now.getTime() + LOGIN_TOKEN_TTL_MS),
+  });
+
+  const url = `${deps.baseUrl.replace(/\/$/, "")}/api/auth/callback?token=${encodeURIComponent(raw)}`;
+  await deps.mailer.send({
+    to: user.email,
+    subject: "Your Loser Survivor sign-in link",
+    text: [
+      `Hi ${user.displayName},`,
+      "",
+      "Here is your sign-in link. It works once and expires in 15 minutes:",
+      "",
+      url,
+      "",
+      "If you didn't ask for this, you can ignore it.",
+    ].join("\n"),
+  });
+
+  return { ok: true, delivered: true, created };
+}
+
+export type ConsumeResult =
+  | { ok: true; sessionToken: string; user: UserRow; expiresAt: Date }
+  | { ok: false; code: "invalid" | "expired" | "used" };
+
+/**
+ * Exchanges a magic-link token for a session.
+ *
+ * Single use is enforced in the database, not in application logic: the UPDATE
+ * matches only rows that are still unconsumed, so two simultaneous clicks on
+ * the same link cannot both win.
+ */
+export async function consumeLoginToken(
+  db: Database,
+  rawToken: string,
+  options: { now?: Date } = {},
+): Promise<ConsumeResult> {
+  const now = options.now ?? new Date();
+  const tokenHash = hashToken(rawToken);
+
+  const [existing] = await db
+    .select()
+    .from(loginTokens)
+    .where(eq(loginTokens.tokenHash, tokenHash))
+    .limit(1);
+
+  if (!existing) return { ok: false, code: "invalid" };
+  if (existing.consumedAt) return { ok: false, code: "used" };
+  if (existing.expiresAt.getTime() <= now.getTime()) return { ok: false, code: "expired" };
+
+  const claimed = await db
+    .update(loginTokens)
+    .set({ consumedAt: now })
+    .where(and(eq(loginTokens.id, existing.id), isNull(loginTokens.consumedAt)))
+    .returning();
+
+  if (claimed.length === 0) return { ok: false, code: "used" };
+
+  const [user] = await db.select().from(users).where(eq(users.id, existing.userId)).limit(1);
+  if (!user || user.deactivatedAt) return { ok: false, code: "invalid" };
+
+  // Signing in invalidates any other outstanding links for this account.
+  await db
+    .update(loginTokens)
+    .set({ consumedAt: now })
+    .where(and(eq(loginTokens.userId, user.id), isNull(loginTokens.consumedAt)));
+
+  const sessionToken = generateToken();
+  const expiresAt = new Date(now.getTime() + SESSION_TTL_MS);
+  await db.insert(sessions).values({
+    userId: user.id,
+    tokenHash: hashToken(sessionToken),
+    expiresAt,
+    lastSeenAt: now,
+  });
+
+  return { ok: true, sessionToken, user, expiresAt };
+}
+
+export async function resolveSession(
+  db: Database,
+  sessionToken: string,
+  options: { now?: Date } = {},
+): Promise<UserRow | null> {
+  const now = options.now ?? new Date();
+
+  const [row] = await db
+    .select({ session: sessions, user: users })
+    .from(sessions)
+    .innerJoin(users, eq(users.id, sessions.userId))
+    .where(eq(sessions.tokenHash, hashToken(sessionToken)))
+    .limit(1);
+
+  if (!row) return null;
+  if (row.session.expiresAt.getTime() <= now.getTime()) return null;
+  if (row.user.deactivatedAt) return null;
+
+  return row.user;
+}
+
+export async function destroySession(db: Database, sessionToken: string): Promise<void> {
+  await db.delete(sessions).where(eq(sessions.tokenHash, hashToken(sessionToken)));
+}
+
+/** Housekeeping for expired rows; safe to call any time. */
+export async function purgeExpiredAuthRows(db: Database, now: Date = new Date()): Promise<void> {
+  await db.delete(sessions).where(sql`${sessions.expiresAt} <= ${now}`);
+  await db.delete(loginTokens).where(sql`${loginTokens.expiresAt} <= ${now}`);
+}

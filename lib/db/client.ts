@@ -42,12 +42,24 @@ export async function createDatabase(url?: string): Promise<DatabaseHandle> {
   };
 }
 
-let cached: Promise<DatabaseHandle> | undefined;
+/**
+ * Process-wide handle for the app. Never call this from a script.
+ *
+ * Cached on globalThis rather than in a module variable because a module
+ * variable does not survive hot reload: the dev server would build a SECOND
+ * PGlite instance over the same data directory, and PGlite is a single-process
+ * embedded database. The symptom is subtle and awful -- a magic-link token
+ * written before an edit reads back as "not found" afterwards, because the two
+ * instances do not share state. Found by clicking through the real sign-in flow
+ * after making an unrelated change.
+ */
+const globalForDb = globalThis as typeof globalThis & {
+  __loserSurvivorDb?: Promise<DatabaseHandle>;
+};
 
-/** Process-wide handle for the app. Never call this from a script. */
 export function getDatabase(): Promise<DatabaseHandle> {
-  cached ??= createDatabase();
-  return cached;
+  globalForDb.__loserSurvivorDb ??= createDatabase();
+  return globalForDb.__loserSurvivorDb;
 }
 
 export { schema };

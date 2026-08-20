@@ -13,7 +13,7 @@ Built to `SPEC.md`, one phase at a time.
 | 1 | Scaffold, schema + migrations, `LEAGUE_CONFIG`, admin provisioning, seed | **complete** |
 | 2 | Rules engine, auto-assignment, validation, end-of-season logic | **complete** |
 | 3 | ESPN provider + the four jobs | **complete** |
-| 4 | Auth and Make Picks | not started |
+| 4 | Auth and Make Picks | **complete** |
 | 5 | League Board, Week Results, My Picks History | not started |
 | 6 | Audit log end to end, then the admin panel | not started |
 | 7 | Deploy, cron, prior-season dry run | not started |
@@ -22,20 +22,37 @@ Built to `SPEC.md`, one phase at a time.
 
 ```bash
 npm install
-cp .env.example .env.local
-npm run db:seed      # migrates, then seeds a full fixture season
+cp .env.example .env.local     # then set DATABASE_URL (see below)
+npm run db:seed                # migrates, then seeds a full fixture season
 npm run dev
 ```
 
-No database server is required. `DATABASE_URL` defaults to embedded
-[PGlite](https://pglite.dev) (Postgres 16 compiled to WASM) at `./.pglite`. Point it at a real
-Postgres and everything switches over — the SQL and the migrations are identical:
+Sign in at `/signin` with any seeded address — `dana@example.com` is the admin. There is no
+password: the magic link is **printed to the terminal** by the console mailer, so local
+development needs no email account, no API key, and no verified domain.
 
-```bash
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/loser_survivor
+### The database
+
+**Use a real Postgres.** `DATABASE_URL` is a normal connection string:
+
+```
+DATABASE_URL=postgres://user@localhost:5432/loser_survivor
 ```
 
-`docker-compose.yml` is provided for a local server; Neon needs only the connection string.
+If you have no Postgres, `npm run db:serve` gives you one with nothing to install — it hosts an
+embedded PGlite database over the real Postgres wire protocol on port 5432, and accepts any
+username and password.
+
+> **Do not point the app directly at a `pglite://` path.** PGlite is a *single-process* embedded
+> database. It works fine for scripts and tests, but the Next dev server opens it more than once
+> — hot reload, plus separate bundles for server components and route handlers — and the WASM
+> instance aborts. The failure is nasty rather than obvious: a row written by one request reads
+> back as missing from the next, so a freshly issued magic link reports "not valid". That is what
+> `db:serve` exists to prevent.
+
+Tests are unaffected: each suite builds its own **in-memory** PGlite, one instance per process,
+which is fast and perfectly isolated. Migrations are plain Postgres and have been applied to both
+PGlite and PostgreSQL 15 with identical results.
 
 ### Scripts
 
@@ -48,6 +65,7 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/loser_survivor
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run provision -- roster` | The §4 admin reconciliation table |
 | `npm run job -- <name>` | Run a §8 job by hand |
+| `npm run db:serve` | Local Postgres with nothing to install |
 
 ### Seeding options
 
@@ -266,6 +284,57 @@ visibly red instead of returning a 200 nobody reads.
   eliminate every pick on both teams.
 - **`gradeWeek` only opens a week that is still `upcoming`**, so a re-run can never reopen a week
   that has already been played.
+
+## Auth and Make Picks (§10, §9)
+
+### Auth
+
+Passwordless magic links, implemented directly rather than with a library: Auth.js v5 is still
+beta, v4 predates the App Router, and Lucia is deprecated in favour of exactly this approach.
+
+- **Neither table stores a usable credential.** `login_token` and `session` hold only
+  `sha256(token)`. The raw value exists in the emailed URL and in the cookie, nowhere else, so a
+  database dump yields nothing anyone can sign in with.
+- Links are **single-use and expire in 15 minutes**, and single use is enforced by the database —
+  the `UPDATE` matches only unconsumed rows, so two simultaneous clicks cannot both win. Signing
+  in also invalidates any other outstanding links for that account.
+- The sign-in form **does not reveal who is in the league**: an unknown address with no invite
+  code gets the same "if that address belongs to the league…" response as a real member. A wrong
+  *invite code* is reported, because someone typing one needs to know they mistyped it.
+- Session cookies are `httpOnly`, `sameSite=lax`, and `secure` outside development.
+- Joining with the league invite code creates an account with **`picks_purchased = 0`** (§4) —
+  an account, not picks. An admin provisions those once they have seen the money.
+
+Email goes through a small `Mailer` port: the console in development, Resend when
+`RESEND_API_KEY` and `MAIL_FROM` are set. Phase 6b's weekly digest will use the same interface.
+
+### Make Picks
+
+The copy works hard on the one rule everyone gets wrong: you are picking the team **to lose**, and
+a tie kills the pick too. That appears on the heading, on each selected option, and again in the
+confirmation step, which restates every choice in the spec's own words — *"Pick 3 → Broncos to
+LOSE (a tie eliminates)"*.
+
+- A live countdown to lock, and once it passes the form says so and refuses to submit — rather
+  than letting someone fill it in and be turned away at the end.
+- Teams not playing this week are simply absent, so a team on bye cannot be chosen.
+- A badge shows how many times that slot has already used each team. Informational only: under
+  `teamReuse: "unlimited"` nothing is blocked, including two of your own slots on one team.
+- If you submit nothing, the screen says what will be auto-assigned **and why**, computed by the
+  real §5.2 engine so the preview cannot drift from what `lockWeek` actually does.
+
+### Decisions taken in Phase 4
+
+- **The whole form saves or none of it does.** §9 says save all slots in one submit; a partial
+  save would leave an entrant believing they had picked when they had not.
+- **The Make Picks query never loads another entrant's selections.** Not filtered on render —
+  never fetched. That is what makes acceptance test 22 true of the payload rather than of the UI.
+- **The session cookie is set on the redirect response itself.** Setting it through the `cookies()`
+  store does not attach it to a `NextResponse.redirect()`, so the callback sent users to a page
+  that immediately bounced them back to sign in, holding a perfectly valid session they never
+  received. Found by clicking a real link; no test would have caught it.
+- **The database handle is cached on `globalThis`**, not in a module variable, so hot reload does
+  not build a second connection pool per edit.
 
 ## Deferred deliberately
 
