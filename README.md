@@ -14,7 +14,7 @@ Built to `SPEC.md`, one phase at a time.
 | 2 | Rules engine, auto-assignment, validation, end-of-season logic | **complete** |
 | 3 | ESPN provider + the four jobs | **complete** |
 | 4 | Auth and Make Picks | **complete** |
-| 5 | League Board, Week Results, My Picks History | not started |
+| 5 | League Board, Week Results, My Picks History | **complete** |
 | 6 | Audit log end to end, then the admin panel | not started |
 | 7 | Deploy, cron, prior-season dry run | not started |
 
@@ -105,6 +105,7 @@ lib/week/        Week identity and ordering (§2.1, §3.1) — pure, no I/O
 lib/rules/       §5 grading, auto-assignment, validation; §6 end of season — pure, no I/O
 lib/providers/   §3 the ESPN provider — the only code that knows its response shape
 lib/jobs/        §8 the four jobs, as plain functions over a JobContext
+lib/views/       §9 read screens: League Board, Week Results, My Picks History
 fixtures/espn/   Recorded real ESPN responses; tests never call the network
 lib/admin/       §4 provisioning services
 lib/audit/       The §7 port that Phase 6 implements
@@ -385,6 +386,56 @@ Other behaviour:
   means **elimination** for a clash the entrant never chose. Punishing a missed deadline that
   harshly seemed worse than tolerating a rare accidental hedge, but it is a league decision, not
   a technical one.
+
+## The read screens (§9)
+
+Three screens over one shared rule, in `lib/views/visibility.ts`.
+
+### Acceptance test 22 — verified against the real payload
+
+> "Other users' selections are absent from the API response before lock — not merely hidden in
+> the UI. Verify by inspecting the network payload."
+
+The guarantee is structural: **before a week is revealed, other entrants' selections are never
+fetched**. The visibility rule sits in the query's `where` clause, not in a component, so there is
+no code path where a screen holds data it declines to draw.
+
+Verified two ways. As a test, by serialising the whole response and hunting for the other
+entrant's slot ids and user id. And by hand, fetching `/board` and `/results` in the browser with
+a real session and grepping the complete response, RSC flight data included:
+
+| Payload | Own pick | Other entrant's pick | Other entrant's name |
+|---|---|---|---|
+| `/board` | present | **absent** | present (standings) |
+| `/results` | present | **absent** | **absent** |
+
+Their *name* on the board is deliberate — §9 wants alive/eliminated counts visible at all times.
+What must never appear is the link between a person and a team, and it does not.
+
+One subtlety worth recording: on Week Results, a team someone secretly picked *does* appear in the
+payload — as one of the two teams in a matchup. That is the public schedule, not a leak, and an
+early version of the test wrongly failed on it.
+
+### When a week reveals
+
+Normally `lockWeek` flips the status and that is the reveal. But the reveal belongs to the
+deadline, not to a job: if `lock_at` has passed and the cron is late, picks are already final —
+`validateSelection` has been refusing submissions since that moment — so they are revealed anyway
+rather than punishing the league for a hiccup.
+
+### The screens
+
+- **League Board** — entrants ranked by surviving picks, with alive / eliminated / purchased, the
+  viewer and admin marked, and the champion banner once the season closes. This week's picks
+  appear after lock.
+- **Week Results** — scores with won/lost/tied per team, every selection colour-coded
+  survived / eliminated / void, an `auto` badge where §5.2 assigned it, and **ties flagged
+  loudly**: an amber card reading "TIE — every pick on both teams is eliminated". Canceled and
+  postponed games say what that means for the picks on them.
+- **My Picks History** — organised by slot, because a slot is a persistent entity with its own
+  story. Each row is week, team, opponent, score, and outcome. **The score is written from the
+  picked team's side**, so `17-24` always means your team lost by seven — which in this league is
+  the good news.
 
 ## Deferred deliberately
 

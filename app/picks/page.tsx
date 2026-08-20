@@ -1,6 +1,4 @@
-import Link from "next/link";
-
-import { signOutAction } from "@/app/actions/auth";
+import { AppShell } from "@/components/app-shell";
 import { requireUser } from "@/lib/auth/current-user";
 import { getDatabase } from "@/lib/db/client";
 import { getMakePicksData } from "@/lib/picks/queries";
@@ -50,18 +48,7 @@ export default async function PicksPage() {
   );
 
   return (
-    <main className="mx-auto flex max-w-2xl flex-col gap-6 px-4 py-6 sm:px-6">
-      <header className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Make Picks</h1>
-          <p className="text-sm text-neutral-400">{user.displayName}</p>
-        </div>
-        <form action={signOutAction}>
-          <button type="submit" className="text-sm text-neutral-400 underline underline-offset-4">
-            Sign out
-          </button>
-        </form>
-      </header>
+    <AppShell title="Make Picks" subtitle={user.displayName} current="/picks">
 
       {user.picksPurchased === 0 ? (
         <Notice tone="warn" title="You don't have any picks yet">
@@ -108,12 +95,7 @@ export default async function PicksPage() {
         </section>
       ) : null}
 
-      <nav className="text-sm text-neutral-500">
-        <Link href="/" className="underline underline-offset-4">
-          Back to overview
-        </Link>
-      </nav>
-    </main>
+    </AppShell>
   );
 }
 
