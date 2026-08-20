@@ -1,0 +1,25 @@
+# Optional. Phase 1 runs against embedded PGlite by default, so nothing here is
+# required to migrate, seed, or test. Bring this up when you want a real local
+# Postgres server, then set both DATABASE_URL and DATABASE_URL_MIGRATOR to:
+#   postgres://postgres:postgres@localhost:5432/loser_survivor
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: loser-survivor-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: loser_survivor
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
