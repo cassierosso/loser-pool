@@ -115,3 +115,24 @@ export function allocateSlots(input: {
     },
   };
 }
+
+
+/**
+ * Games where an allocation backs BOTH teams.
+ *
+ * Checked over the whole allocation rather than pick by pick, so the entrant is
+ * told which two teams clash instead of getting a complaint about one slot.
+ * Pure: the caller supplies the week's games.
+ */
+export function findBothSidesConflicts(input: {
+  allocations: Allocation[];
+  games: ReadonlyArray<{ id: string; homeTeamId: string; awayTeamId: string }>;
+}): Array<{ gameId: string; homeTeamId: string; awayTeamId: string }> {
+  const placed = new Set(
+    input.allocations.filter((entry) => entry.count > 0).map((entry) => entry.teamId),
+  );
+
+  return input.games
+    .filter((game) => placed.has(game.homeTeamId) && placed.has(game.awayTeamId))
+    .map((game) => ({ gameId: game.id, homeTeamId: game.homeTeamId, awayTeamId: game.awayTeamId }));
+}

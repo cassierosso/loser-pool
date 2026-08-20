@@ -168,3 +168,69 @@ describe("lockPolicy: per_game (SS5.3)", () => {
     expect(result.ok).toBe(true);
   });
 });
+
+describe("backing both sides of one game (bothSidesOfGame)", () => {
+  it("rejects a pick on the opponent of a team you already have", () => {
+    // Hedging a single game guarantees one of the two picks survives whatever
+    // happens, which is what the rule exists to stop.
+    const matchup = game("BUF", "MIA", { kickoffAt: KICKOFF });
+
+    const result = validateSelection(
+      input({
+        games: [matchup],
+        teamId: "MIA",
+        otherSelectionsThisWeekForUser: [selection("slot-2", "BUF", matchup.id)],
+      }),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("both_sides_of_game");
+  });
+
+  it("still allows several picks on the SAME team", () => {
+    // Acceptance test 4 is untouched: the rule is about opposite sides, not
+    // about stacking.
+    const matchup = game("BUF", "MIA", { kickoffAt: KICKOFF });
+
+    const result = validateSelection(
+      input({
+        games: [matchup],
+        teamId: "MIA",
+        otherSelectionsThisWeekForUser: [selection("slot-2", "MIA", matchup.id)],
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("does not care about teams in a different game", () => {
+    const one = game("BUF", "MIA", { kickoffAt: KICKOFF });
+    const two = game("SF", "SEA", { kickoffAt: KICKOFF });
+
+    const result = validateSelection(
+      input({
+        games: [one, two],
+        teamId: "MIA",
+        otherSelectionsThisWeekForUser: [selection("slot-2", "SF", two.id)],
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("permits the hedge when the league allows it", () => {
+    const matchup = game("BUF", "MIA", { kickoffAt: KICKOFF });
+
+    const result = validateSelection(
+      input({
+        config: config({ bothSidesOfGame: "allow" }),
+        games: [matchup],
+        teamId: "MIA",
+        otherSelectionsThisWeekForUser: [selection("slot-2", "BUF", matchup.id)],
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+  });
+});

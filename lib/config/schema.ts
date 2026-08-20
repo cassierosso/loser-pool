@@ -29,6 +29,19 @@ export const leagueConfigObject = z.strictObject({
   picksFrozenAt: z.enum(["week_1_kickoff", "never"]).default("week_1_kickoff"),
   /** A pick may use the same team any number of times across the season. */
   teamReuse: z.enum(["unlimited"]).default("unlimited"),
+  /**
+   * Whether one entrant may hold picks on BOTH teams in the same game.
+   *
+   * Not in the SS0 table -- this is a league rule added after the fact. Backing
+   * both sides is a hedge: exactly one of those picks survives whatever
+   * happens, unless the game ties and both die. "block" (the default) refuses
+   * it at submit time.
+   *
+   * This does NOT narrow SS5.3, which is about a different thing: reusing a
+   * team across weeks and stacking several picks on ONE team both remain
+   * unrestricted under teamReuse "unlimited".
+   */
+  bothSidesOfGame: z.enum(["block", "allow"]).default("block"),
   /** A tie eliminates every pick on BOTH teams. */
   tieResult: z.enum(["eliminate"]).default("eliminate"),
   /** SS5.2 step 1. */

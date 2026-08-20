@@ -6,7 +6,7 @@ import { withTransaction, type Database } from "@/lib/db/client";
 import { games, pickSlots, selections, teams, weekStates, type UserRow } from "@/lib/db/schema";
 import { validateSelection } from "@/lib/rules/validate";
 
-import { allocateSlots, type Allocation } from "./allocate";
+import { allocateSlots, findBothSidesConflicts, type Allocation } from "./allocate";
 
 /**
  * SS5.3 / SS9 -- submitting picks.
@@ -280,6 +280,31 @@ export async function submitAllocations(
   }
 
   const weekGames = await db.select().from(games).where(eq(games.weekStateId, week.id));
+
+  // LEAGUE_CONFIG bothSidesOfGame: refuse a hedge across a single game, and say
+  // which two teams clash rather than blaming an individual slot.
+  if (config.bothSidesOfGame === "block") {
+    const conflicts = findBothSidesConflicts({ allocations: input.allocations, games: weekGames });
+
+    if (conflicts.length > 0) {
+      const teamRows = await db.select().from(teams);
+      const nameById = new Map(teamRows.map((team) => [team.id, team.displayName]));
+
+      return {
+        ok: false,
+        errors: conflicts.map((conflict) => ({
+          slotId: "",
+          slotLabel: "",
+          code: "both_sides_of_game",
+          reason:
+            `You have picks on both ${nameById.get(conflict.awayTeamId) ?? "one team"} and ` +
+            `${nameById.get(conflict.homeTeamId) ?? "the other"} — they play each other. ` +
+            `Back one side or the other, not both.`,
+        })),
+      };
+    }
+  }
+
   const errors: SubmitFailure[] = [];
   const valid: Array<{ slotId: string; teamId: string; gameId: string; slotLabel: string }> = [];
 
@@ -295,7 +320,16 @@ export async function submitAllocations(
       user: { id: input.user.id, picksPurchased: input.user.picksPurchased },
       teamId: assignment.teamId,
       games: weekGames,
-      otherSelectionsThisWeekForUser: [],
+      otherSelectionsThisWeekForUser: outcome.result.assignments
+        .filter((other) => other.slotId !== assignment.slotId)
+        .map((other) => ({
+          id: "",
+          pickSlotId: other.slotId,
+          teamId: other.teamId,
+          gameId: "",
+          result: "pending" as const,
+          wasAutoAssigned: false,
+        })),
       now,
     });
 

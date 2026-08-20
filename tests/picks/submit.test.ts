@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 
 import { createCollectingAuditRecorder } from "@/lib/audit/port";
+import { DEFAULT_LEAGUE_CONFIG } from "@/lib/config";
 import type { Database, DatabaseHandle } from "@/lib/db/client";
-import { pickSlots, selections, weekStates, type GameRow, type TeamRow, type WeekStateRow } from "@/lib/db/schema";
+import { leagues, pickSlots, selections, weekStates, type GameRow, type TeamRow, type WeekStateRow } from "@/lib/db/schema";
 import { submitAllocations, submitSelections } from "@/lib/picks/submit";
 
 import { createTestDatabase, seedTeams, setupLeague } from "../helpers/db";
@@ -461,5 +462,66 @@ describe("submitting an aggregate allocation (SS9)", () => {
     expect(rows).toHaveLength(1);
     expect(marcus.slots.map((slot) => slot.id)).toContain(rows[0]!.pickSlotId);
     expect(dana.slots.map((slot) => slot.id)).not.toContain(rows[0]!.pickSlotId);
+  });
+});
+
+describe("backing both sides of one game, end to end", () => {
+  it("refuses the allocation and names both teams", async () => {
+    const dana = await addEntrant(db, "dana", 4);
+    // weekGames[0] is teamRows[0] (home) vs teamRows[1] (away).
+    const result = await submitAllocations(
+      db,
+      {
+        user: dana.user,
+        now: BEFORE_LOCK,
+        allocations: [
+          { teamId: teamRows[0]!.id, count: 2 },
+          { teamId: teamRows[1]!.id, count: 1 },
+        ],
+      },
+      recorder,
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors[0]?.code).toBe("both_sides_of_game");
+    expect(result.errors[0]?.reason).toContain(teamRows[0]!.displayName);
+    expect(result.errors[0]?.reason).toContain(teamRows[1]!.displayName);
+    // Nothing partially applied.
+    expect(await db.select().from(selections)).toHaveLength(0);
+  });
+
+  it("still allows stacking several picks on one team", async () => {
+    const dana = await addEntrant(db, "dana", 4);
+
+    const result = await submitAllocations(
+      db,
+      { user: dana.user, now: BEFORE_LOCK, allocations: [{ teamId: teamRows[0]!.id, count: 3 }] },
+      recorder,
+    );
+
+    expect(result).toMatchObject({ ok: true, saved: 3 });
+  });
+
+  it("allows the hedge when the league config permits it", async () => {
+    await db
+      .update(leagues)
+      .set({ config: { ...DEFAULT_LEAGUE_CONFIG, bothSidesOfGame: "allow" } });
+    const dana = await addEntrant(db, "dana", 4);
+
+    const result = await submitAllocations(
+      db,
+      {
+        user: dana.user,
+        now: BEFORE_LOCK,
+        allocations: [
+          { teamId: teamRows[0]!.id, count: 1 },
+          { teamId: teamRows[1]!.id, count: 1 },
+        ],
+      },
+      recorder,
+    );
+
+    expect(result).toMatchObject({ ok: true, saved: 2 });
   });
 });

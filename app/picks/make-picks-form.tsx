@@ -45,6 +45,8 @@ export function MakePicksForm(props: {
   lockLabel: string | null;
   matchups: MatchupView[];
   aliveCount: number;
+  /** LEAGUE_CONFIG bothSidesOfGame: refuse picks on both teams in one game. */
+  blockBothSides: boolean;
   initialAllocation: Record<string, number>;
   autoAssign: AutoAssignSummary;
   canSubmit: boolean;
@@ -153,16 +155,25 @@ export function MakePicksForm(props: {
                 </p>
               </header>
               <div className="mt-2.5 flex flex-col gap-2">
-                {[matchup.away, matchup.home].map((team) => (
-                  <TeamRow
-                    key={team.id}
-                    team={team}
-                    count={allocation[team.id] ?? 0}
-                    canAdd={spare > 0 && !locked && props.canSubmit}
-                    disabled={locked || !props.canSubmit}
-                    onAdjust={adjust}
-                  />
-                ))}
+                {[matchup.away, matchup.home].map((team) => {
+                  const opponent = team.id === matchup.home.id ? matchup.away : matchup.home;
+                  const opponentCount = allocation[opponent.id] ?? 0;
+                  // You may stack as many picks as you like on one team; what
+                  // you may not do is also back the team it is playing.
+                  const blockedByOpponent = props.blockBothSides && opponentCount > 0;
+
+                  return (
+                    <TeamRow
+                      key={team.id}
+                      team={team}
+                      count={allocation[team.id] ?? 0}
+                      canAdd={spare > 0 && !locked && props.canSubmit && !blockedByOpponent}
+                      disabled={locked || !props.canSubmit}
+                      blockedBy={blockedByOpponent ? opponent.name : null}
+                      onAdjust={adjust}
+                    />
+                  );
+                })}
               </div>
             </section>
           ))}
@@ -216,6 +227,8 @@ function TeamRow(props: {
   count: number;
   canAdd: boolean;
   disabled: boolean;
+  /** Name of the opponent already picked, when that is what blocks this team. */
+  blockedBy: string | null;
   onAdjust: (teamId: string, delta: number) => void;
 }) {
   const { team, count } = props;
@@ -232,6 +245,10 @@ function TeamRow(props: {
         <p className="truncate text-sm font-medium">{team.name}</p>
         {count > 0 ? (
           <p className="mt-0.5 text-[11px] font-bold text-emerald-300">{count} to LOSE</p>
+        ) : props.blockedBy ? (
+          <p className="mt-0.5 text-[11px] text-neutral-500">
+            can&apos;t back both sides — you have {props.blockedBy}
+          </p>
         ) : null}
       </div>
 
@@ -249,6 +266,7 @@ function TeamRow(props: {
         <button
           type="button"
           aria-label={`Add a pick to ${team.name}`}
+          title={props.blockedBy ? `You already have a pick on ${props.blockedBy}` : undefined}
           disabled={props.disabled || !props.canAdd}
           onClick={() => props.onAdjust(team.id, 1)}
           className="h-9 w-9 rounded-lg border border-neutral-700 text-lg font-semibold disabled:opacity-30"

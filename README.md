@@ -342,6 +342,15 @@ Other behaviour:
 - Each game is headed by the matchup and its kickoff time — *Green Bay Packers vs New York
   Giants · SUN, NOV 17, 11:00 AM CST* — with the away team first, so the boxes below need only
   the team's own name.
+- **You cannot back both teams in one game.** Picking both sides is a hedge: one of those picks
+  survives no matter who wins, and only a tie takes both. Adding a team greys out its opponent
+  with the reason, and the server refuses the allocation naming both teams. This is a league rule
+  added after the spec, so it lives in `LEAGUE_CONFIG` as `bothSidesOfGame` (`"block"` by
+  default, `"allow"` to permit hedging) rather than being hardcoded, per §0.
+
+  It deliberately does **not** narrow §5.3, which covers something else: stacking several picks
+  on *one* team and reusing a team week after week both remain unrestricted under
+  `teamReuse: "unlimited"`, and acceptance test 4 still passes.
 - **No team-usage badge.** §9 asks for one ("how many times this slot has already used each
   team"); the league asked for it to be dropped as clutter, so this is a deliberate departure.
   The data is still computed for My Picks History. Nothing is blocked either way: under
@@ -355,6 +364,9 @@ Other behaviour:
   save would leave an entrant believing they had picked when they had not.
 - **Picks are allocated by team, not by slot**, with the slot mapping done server-side and
   optimised for stability so that §5.2's repeat-last-week keeps following the same slot.
+- **`bothSidesOfGame` blocks hedging a single game**, checked over the whole allocation so the
+  error names the two clashing teams rather than blaming one slot. Auto-assignment (§5.2) is
+  *not* subject to it — see below.
 - **The Make Picks query never loads another entrant's selections.** Not filtered on render —
   never fetched. That is what makes acceptance test 22 true of the payload rather than of the UI.
 - **The session cookie is set on the redirect response itself.** Setting it through the `cookies()`
@@ -363,6 +375,16 @@ Other behaviour:
   received. Found by clicking a real link; no test would have caught it.
 - **The database handle is cached on `globalThis`**, not in a module variable, so hot reload does
   not build a second connection pool per edit.
+
+## Open questions
+
+- **Should auto-assignment respect `bothSidesOfGame`?** Today it does not. If an entrant misses
+  the deadline and §5.2 repeats their previous team, that team may be the opponent of one they
+  already hold — producing a hedge they could not have chosen themselves. The alternative is to
+  treat it as "no team to repeat" and fall through to `missedPickFallback`, which by default
+  means **elimination** for a clash the entrant never chose. Punishing a missed deadline that
+  harshly seemed worse than tolerating a rare accidental hedge, but it is a league decision, not
+  a technical one.
 
 ## Deferred deliberately
 

@@ -85,6 +85,7 @@ export default async function PicksPage() {
           lockLabel={data.week.lockAt ? formatKickoff(data.week.lockAt) : null}
           matchups={matchups}
           aliveCount={data.slots.length}
+          blockBothSides={data.config.bothSidesOfGame === "block"}
           initialAllocation={data.allocationByTeamId}
           autoAssign={autoAssign}
           canSubmit={user.picksPurchased > 0}

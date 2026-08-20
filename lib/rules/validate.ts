@@ -17,7 +17,8 @@ export type ValidationCode =
   | "week_not_open"
   | "week_locked"
   | "team_not_playing"
-  | "game_kicked_off";
+  | "game_kicked_off"
+  | "both_sides_of_game";
 
 /** Never a block -- SS5.3 requires these be shown as badges only. */
 export type ValidationInfoCode = "team_reused" | "same_team_as_another_slot";
@@ -114,6 +115,32 @@ export function validateSelection(input: ValidateSelectionInput): ValidationResu
       code: "game_kicked_off",
       reason: "That game has already kicked off.",
     };
+  }
+
+  /**
+   * A league rule beyond the spec (LEAGUE_CONFIG bothSidesOfGame): one entrant
+   * may not hold picks on both teams in the same game. Backing both sides is a
+   * hedge -- exactly one of those picks survives no matter who wins, and only a
+   * tie takes both.
+   *
+   * Note what this does NOT touch: stacking several picks on ONE team is still
+   * fine, and so is reusing a team week after week. SS5.3 requires both, and
+   * both still hold.
+   */
+  if (config.bothSidesOfGame === "block") {
+    const opponentId = game.homeTeamId === teamId ? game.awayTeamId : game.homeTeamId;
+    const onOpponent = input.otherSelectionsThisWeekForUser.some(
+      (selection) => selection.teamId === opponentId,
+    );
+
+    if (onOpponent) {
+      return {
+        ok: false,
+        code: "both_sides_of_game",
+        reason:
+          "You already have a pick on the other team in this game. Backing both sides is not allowed.",
+      };
+    }
   }
 
   // Everything below is informational. SS5.3: under teamReuse "unlimited" there

@@ -14,6 +14,7 @@ describe("LEAGUE_CONFIG (SS0)", () => {
       maxPicksPerUser: 10,
       picksFrozenAt: "week_1_kickoff",
       teamReuse: "unlimited",
+      bothSidesOfGame: "block",
       tieResult: "eliminate",
       missedPick: "repeat_last_week",
       missedPickFallback: "eliminate",

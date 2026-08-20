@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { allocateSlots, type Allocation } from "@/lib/picks/allocate";
+import { allocateSlots, findBothSidesConflicts, type Allocation } from "@/lib/picks/allocate";
 import type { PickSlotRow } from "@/lib/db/schema";
 
 /**
@@ -173,5 +173,62 @@ describe("keeping slot histories stable", () => {
 
     expect(result.assignments).toEqual([{ slotId: "slot-1", teamId: "DAL" }]);
     expect(result.cleared).toEqual([]);
+  });
+});
+
+describe("finding both-sides conflicts", () => {
+  const games = [
+    { id: "g1", homeTeamId: "DAL", awayTeamId: "NYG" },
+    { id: "g2", homeTeamId: "TB", awayTeamId: "ARI" },
+  ];
+
+  it("spots an allocation that backs both teams in one game", () => {
+    const conflicts = findBothSidesConflicts({
+      allocations: [
+        { teamId: "DAL", count: 2 },
+        { teamId: "NYG", count: 1 },
+      ],
+      games,
+    });
+
+    expect(conflicts).toEqual([{ gameId: "g1", homeTeamId: "DAL", awayTeamId: "NYG" }]);
+  });
+
+  it("is happy with picks spread across different games", () => {
+    const conflicts = findBothSidesConflicts({
+      allocations: [
+        { teamId: "DAL", count: 2 },
+        { teamId: "ARI", count: 2 },
+      ],
+      games,
+    });
+
+    expect(conflicts).toEqual([]);
+  });
+
+  it("ignores a team allocated zero picks", () => {
+    const conflicts = findBothSidesConflicts({
+      allocations: [
+        { teamId: "DAL", count: 2 },
+        { teamId: "NYG", count: 0 },
+      ],
+      games,
+    });
+
+    expect(conflicts).toEqual([]);
+  });
+
+  it("reports every clashing game", () => {
+    const conflicts = findBothSidesConflicts({
+      allocations: [
+        { teamId: "DAL", count: 1 },
+        { teamId: "NYG", count: 1 },
+        { teamId: "TB", count: 1 },
+        { teamId: "ARI", count: 1 },
+      ],
+      games,
+    });
+
+    expect(conflicts).toHaveLength(2);
   });
 });
