@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { createCollectingAuditRecorder } from "@/lib/audit/port";
 import type { Database, DatabaseHandle } from "@/lib/db/client";
 import { pickSlots, selections, weekStates, type GameRow, type TeamRow, type WeekStateRow } from "@/lib/db/schema";
-import { submitSelections } from "@/lib/picks/submit";
+import { submitAllocations, submitSelections } from "@/lib/picks/submit";
 
 import { createTestDatabase, seedTeams, setupLeague } from "../helpers/db";
 import { addEntrant, addSelection, AFTER_LOCK, BEFORE_LOCK, openWeekWithGames } from "./helpers";
@@ -296,5 +296,170 @@ describe("the audit trail (SS7.1)", () => {
     expect(recorder.events[0]).toMatchObject({ action: "selection.edit" });
     expect(recorder.events[0]?.beforeJson).toMatchObject({ team: teamRows[0]!.abbreviation });
     expect(recorder.events[0]?.afterJson).toMatchObject({ team: teamRows[2]!.abbreviation });
+  });
+});
+
+describe("submitting an aggregate allocation (SS9)", () => {
+  it("places several picks across several teams", async () => {
+    // Five picks: 2 on team A, 1 on team C, 2 on team E.
+    const dana = await addEntrant(db, "dana", 5);
+
+    const result = await submitAllocations(
+      db,
+      {
+        user: dana.user,
+        now: BEFORE_LOCK,
+        allocations: [
+          { teamId: teamRows[0]!.id, count: 2 },
+          { teamId: teamRows[2]!.id, count: 1 },
+          { teamId: teamRows[4]!.id, count: 2 },
+        ],
+      },
+      recorder,
+    );
+
+    expect(result).toMatchObject({ ok: true, saved: 5 });
+
+    const rows = await db.select().from(selections);
+    const counts = rows.reduce<Record<string, number>>((acc, row) => {
+      acc[row.teamId] = (acc[row.teamId] ?? 0) + 1;
+      return acc;
+    }, {});
+    expect(counts).toEqual({
+      [teamRows[0]!.id]: 2,
+      [teamRows[2]!.id]: 1,
+      [teamRows[4]!.id]: 2,
+    });
+    // Each pick landed on a distinct slot.
+    expect(new Set(rows.map((row) => row.pickSlotId)).size).toBe(5);
+  });
+
+  it("refuses an allocation larger than the entrant's alive picks", async () => {
+    const dana = await addEntrant(db, "dana", 2);
+
+    const result = await submitAllocations(
+      db,
+      { user: dana.user, now: BEFORE_LOCK, allocations: [{ teamId: teamRows[0]!.id, count: 3 }] },
+      recorder,
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors[0]?.code).toBe("too_many_picks");
+    expect(await db.select().from(selections)).toHaveLength(0);
+  });
+
+  it("counts eliminated slots as unavailable", async () => {
+    const dana = await addEntrant(db, "dana", 3);
+    await db
+      .update(pickSlots)
+      .set({
+        status: "eliminated",
+        eliminatedSeasonType: 2,
+        eliminatedWeek: 3,
+        eliminatedReason: "team_won",
+        eliminatedAt: BEFORE_LOCK,
+      })
+      .where(eq(pickSlots.id, dana.slots[2]!.id));
+
+    const result = await submitAllocations(
+      db,
+      { user: dana.user, now: BEFORE_LOCK, allocations: [{ teamId: teamRows[0]!.id, count: 3 }] },
+      recorder,
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors[0]?.reason).toContain("only have 2");
+  });
+
+  it("removes the surplus pick when a count is reduced", async () => {
+    const dana = await addEntrant(db, "dana", 3);
+    await submitAllocations(
+      db,
+      { user: dana.user, now: BEFORE_LOCK, allocations: [{ teamId: teamRows[0]!.id, count: 3 }] },
+      recorder,
+    );
+    recorder.events.length = 0;
+
+    await submitAllocations(
+      db,
+      { user: dana.user, now: BEFORE_LOCK, allocations: [{ teamId: teamRows[0]!.id, count: 1 }] },
+      recorder,
+    );
+
+    const rows = await db.select().from(selections);
+    expect(rows).toHaveLength(1);
+    expect(recorder.events.filter((event) => event.action === "selection.clear")).toHaveLength(2);
+  });
+
+  it("leaves slot histories alone when the same allocation is resubmitted", async () => {
+    // SS5.2 repeats the team on a given SLOT, so shuffling which slot holds
+    // which team would quietly change what happens next week.
+    const dana = await addEntrant(db, "dana", 3);
+    const allocations = [
+      { teamId: teamRows[0]!.id, count: 2 },
+      { teamId: teamRows[2]!.id, count: 1 },
+    ];
+
+    await submitAllocations(db, { user: dana.user, now: BEFORE_LOCK, allocations }, recorder);
+    const first = await db.select().from(selections).orderBy(selections.pickSlotId);
+    recorder.events.length = 0;
+
+    await submitAllocations(db, { user: dana.user, now: BEFORE_LOCK, allocations }, recorder);
+    const second = await db.select().from(selections).orderBy(selections.pickSlotId);
+
+    expect(second.map((row) => [row.pickSlotId, row.teamId])).toEqual(
+      first.map((row) => [row.pickSlotId, row.teamId]),
+    );
+    // Nothing actually changed, so nothing is logged as changed.
+    expect(recorder.events).toHaveLength(0);
+  });
+
+  it("still refuses a late allocation", async () => {
+    // Acceptance test 5 holds for the aggregate path too.
+    const dana = await addEntrant(db, "dana", 2);
+
+    const result = await submitAllocations(
+      db,
+      { user: dana.user, now: AFTER_LOCK, allocations: [{ teamId: teamRows[0]!.id, count: 1 }] },
+      recorder,
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors[0]?.code).toBe("week_locked");
+  });
+
+  it("still refuses a team that is not playing", async () => {
+    const dana = await addEntrant(db, "dana", 2);
+
+    const result = await submitAllocations(
+      db,
+      { user: dana.user, now: BEFORE_LOCK, allocations: [{ teamId: teamRows[20]!.id, count: 1 }] },
+      recorder,
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors[0]?.code).toBe("team_not_playing");
+  });
+
+  it("cannot be aimed at another entrant's slots", async () => {
+    // The request carries no slot id at all, so there is nothing to tamper
+    // with: marcus's allocation can only ever land on marcus's own slots.
+    const dana = await addEntrant(db, "dana", 2);
+    const marcus = await addEntrant(db, "marcus", 1);
+
+    await submitAllocations(
+      db,
+      { user: marcus.user, now: BEFORE_LOCK, allocations: [{ teamId: teamRows[0]!.id, count: 1 }] },
+      recorder,
+    );
+
+    const rows = await db.select().from(selections);
+    expect(rows).toHaveLength(1);
+    expect(marcus.slots.map((slot) => slot.id)).toContain(rows[0]!.pickSlotId);
+    expect(dana.slots.map((slot) => slot.id)).not.toContain(rows[0]!.pickSlotId);
   });
 });

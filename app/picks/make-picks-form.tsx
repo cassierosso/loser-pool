@@ -9,6 +9,8 @@ export interface TeamView {
   id: string;
   abbreviation: string;
   name: string;
+  /** How many times this entrant has used the team this season. Badge only. */
+  seasonUses: number;
 }
 
 export interface MatchupView {
@@ -19,42 +21,39 @@ export interface MatchupView {
   away: TeamView;
 }
 
-export interface SlotView {
-  id: string;
-  label: string;
-  selectedTeamId: string | null;
-  wasAutoAssigned: boolean;
-  teamUses: Record<string, number>;
-  autoAssign: {
-    explanation: string;
-    teamAbbreviation: string | null;
-    willEliminate: boolean;
-  } | null;
+export interface AutoAssignSummary {
+  repeat: number;
+  eliminate: number;
+  other: number;
 }
 
 const INITIAL: SubmitPicksState = { status: "idle", message: "", errors: [] };
 
 /**
- * SS9. The copy here works hard on one thing: you are picking the team you
- * think will LOSE, and a tie kills the pick too. That is the rule everyone gets
- * wrong, so it is repeated on the heading, on every option, and again in the
- * confirmation step.
+ * SS9 -- Make Picks.
+ *
+ * Entrants think in totals, not in slots: "I have five picks, put two on
+ * Dallas". So the screen is one list of this week's games with a stepper on
+ * each team, and a running count of how many picks are still spare. Which
+ * pick_slot each one lands on is decided on the server (lib/picks/allocate.ts),
+ * because that is a question about history, not about this form.
+ *
+ * The copy works hard on the one rule everyone gets wrong: you are picking the
+ * team you think will LOSE, and a tie kills the pick too.
  */
 export function MakePicksForm(props: {
   weekLabel: string;
   lockAt: string | null;
   lockLabel: string | null;
   matchups: MatchupView[];
-  slots: SlotView[];
+  aliveCount: number;
+  initialAllocation: Record<string, number>;
+  autoAssign: AutoAssignSummary;
   canSubmit: boolean;
 }) {
   const [state, formAction, pending] = useActionState(submitPicksAction, INITIAL);
   const [now, setNow] = useState(() => Date.now());
-  const [choices, setChoices] = useState<Record<string, string>>(() =>
-    Object.fromEntries(
-      props.slots.flatMap((slot) => (slot.selectedTeamId ? [[slot.id, slot.selectedTeamId]] : [])),
-    ),
-  );
+  const [allocation, setAllocation] = useState<Record<string, number>>(props.initialAllocation);
   const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
@@ -63,16 +62,11 @@ export function MakePicksForm(props: {
     return () => window.clearInterval(id);
   }, [props.lockAt]);
 
-  // Close the confirmation panel once a submit succeeds, so the saved state is
-  // what the entrant is looking at rather than a stale "confirm" prompt.
   useEffect(() => {
     if (state.status === "saved") setConfirming(false);
   }, [state.status]);
 
   const msUntilLock = props.lockAt ? new Date(props.lockAt).getTime() - now : null;
-  // Once the deadline passes the server will refuse the submission anyway
-  // (SS5.3, acceptance test 5). Saying so here rather than letting someone fill
-  // the whole form in and be turned away at the end.
   const locked = msUntilLock !== null && msUntilLock <= 0;
 
   const teamsById = useMemo(() => {
@@ -84,39 +78,43 @@ export function MakePicksForm(props: {
     return map;
   }, [props.matchups]);
 
-  const errorsBySlot = useMemo(
-    () => Object.fromEntries(state.errors.map((error) => [error.slotId, error])),
-    [state.errors],
-  );
+  const used = Object.values(allocation).reduce((sum, count) => sum + count, 0);
+  const spare = props.aliveCount - used;
 
-  const chosenCount = Object.values(choices).filter(Boolean).length;
-  const unpicked = props.slots.filter((slot) => !choices[slot.id]);
+  const adjust = (teamId: string, delta: number) => {
+    setAllocation((current) => {
+      const next = (current[teamId] ?? 0) + delta;
+      if (next < 0) return current;
+      if (delta > 0 && spare <= 0) return current;
+      const updated = { ...current };
+      if (next === 0) delete updated[teamId];
+      else updated[teamId] = next;
+      return updated;
+    });
+  };
+
+  const chosen = Object.entries(allocation)
+    .filter(([, count]) => count > 0)
+    .map(([teamId, count]) => ({ team: teamsById[teamId], count }))
+    .filter((entry): entry is { team: TeamView; count: number } => Boolean(entry.team))
+    .sort((a, b) => b.count - a.count || a.team.name.localeCompare(b.team.name));
 
   return (
     <>
-      <LockBanner
-        weekLabel={props.weekLabel}
-        msUntilLock={msUntilLock}
-        lockLabel={props.lockLabel}
-      />
+      <LockBanner weekLabel={props.weekLabel} msUntilLock={msUntilLock} lockLabel={props.lockLabel} />
 
       {locked ? (
-        <p
-          role="status"
-          className="rounded-lg border border-red-800 bg-red-950/60 px-4 py-3 text-sm text-red-200"
-        >
-          <strong>{props.weekLabel} is locked.</strong> Picks are final — anything you left blank
+        <p role="status" className="rounded-lg border border-red-800 bg-red-950/60 px-4 py-3 text-sm text-red-200">
+          <strong>{props.weekLabel} is locked.</strong> Picks are final — anything left unallocated
           has been auto-assigned.
         </p>
       ) : null}
 
       <section className="rounded-xl border border-amber-700 bg-amber-950/40 px-4 py-3">
-        <p className="text-sm font-semibold text-amber-100">
-          Pick the team you think will LOSE.
-        </p>
+        <p className="text-sm font-semibold text-amber-100">Pick the teams you think will LOSE.</p>
         <p className="mt-1 text-sm text-amber-200/90">
-          If your team wins, that pick is gone for good.{" "}
-          <strong className="text-amber-100">A tie eliminates it too.</strong>
+          Put as many picks on a team as you like. If that team wins, every pick on it is gone for
+          good — <strong className="text-amber-100">and a tie eliminates them too.</strong>
         </p>
       </section>
 
@@ -130,116 +128,58 @@ export function MakePicksForm(props: {
           }
         >
           {state.message}
+          {state.errors.length > 0 ? (
+            <span className="mt-1 block text-xs opacity-90">
+              {state.errors.map((error) => error.reason).join(" ")}
+            </span>
+          ) : null}
         </p>
       ) : null}
 
-      <form action={formAction} className="flex flex-col gap-5">
-        {props.slots.map((slot) => (
-          <fieldset key={slot.id} className="rounded-xl border border-neutral-800 p-4">
-            <legend className="flex items-center gap-2 px-1 text-sm font-semibold">
-              {slot.label}
-              {slot.wasAutoAssigned ? (
-                <span className="rounded-full bg-sky-900 px-2 py-0.5 text-[11px] font-medium text-sky-200">
-                  auto-assigned
-                </span>
-              ) : null}
-            </legend>
+      <form action={formAction} className="flex flex-col gap-4">
+        <input type="hidden" name="allocation" value={JSON.stringify(allocation)} />
 
-            <input type="hidden" name={`slot:${slot.id}`} value={choices[slot.id] ?? ""} />
+        <PickBudget used={used} total={props.aliveCount} />
 
-            {errorsBySlot[slot.id] ? (
-              <p className="mb-3 rounded-lg bg-red-950/60 px-3 py-2 text-xs text-red-200">
-                {errorsBySlot[slot.id]!.reason}
+        <div className="flex flex-col gap-4">
+          {props.matchups.map((matchup) => (
+            <section key={matchup.gameId} className="rounded-xl border border-neutral-800 p-3">
+              <p className="px-1 text-[11px] uppercase tracking-wide text-neutral-500">
+                {matchup.kickoffLabel}
               </p>
-            ) : null}
-
-            <div className="mt-2 flex flex-col gap-2">
-              {props.matchups.map((matchup) => (
-                <div key={`${slot.id}-${matchup.gameId}`} className="flex flex-col gap-1">
-                  <p className="text-[11px] uppercase tracking-wide text-neutral-500">
-                    {matchup.kickoffLabel}
-                  </p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[matchup.away, matchup.home].map((team) => {
-                      const selected = choices[slot.id] === team.id;
-                      const uses = slot.teamUses[team.id] ?? 0;
-                      return (
-                        <button
-                          key={team.id}
-                          type="button"
-                          aria-pressed={selected}
-                          onClick={() =>
-                            setChoices((current) => ({
-                              ...current,
-                              [slot.id]: current[slot.id] === team.id ? "" : team.id,
-                            }))
-                          }
-                          className={`flex items-center justify-between gap-2 rounded-lg border px-3 py-2.5 text-left text-sm ${
-                            selected
-                              ? "border-emerald-500 bg-emerald-950/60 text-emerald-100"
-                              : "border-neutral-700 bg-neutral-900 text-neutral-200"
-                          }`}
-                        >
-                          <span>
-                            <span className="font-semibold">{team.abbreviation}</span>{" "}
-                            <span className="text-neutral-400">
-                              {team === matchup.home ? "vs" : "at"}
-                            </span>
-                          </span>
-                          <span className="flex items-center gap-1.5">
-                            {uses > 0 ? (
-                              <span
-                                title={`This pick has used ${team.abbreviation} ${uses} time${uses === 1 ? "" : "s"}`}
-                                className="rounded-full bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400"
-                              >
-                                ×{uses}
-                              </span>
-                            ) : null}
-                            {selected ? (
-                              <span className="text-[10px] font-bold text-emerald-300">TO LOSE</span>
-                            ) : null}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* SS9: if nothing is submitted, say what happens and why. */}
-            {!choices[slot.id] && slot.autoAssign ? (
-              <p
-                className={`mt-3 rounded-lg px-3 py-2 text-xs ${
-                  slot.autoAssign.willEliminate
-                    ? "bg-red-950/60 text-red-200"
-                    : "bg-neutral-800/60 text-neutral-300"
-                }`}
-              >
-                If you don&apos;t pick: {slot.label} {slot.autoAssign.explanation}
-                {slot.autoAssign.teamAbbreviation ? ` (${slot.autoAssign.teamAbbreviation})` : ""}.
-              </p>
-            ) : null}
-          </fieldset>
-        ))}
+              <div className="mt-2 flex flex-col gap-2">
+                {[matchup.away, matchup.home].map((team) => (
+                  <TeamRow
+                    key={team.id}
+                    team={team}
+                    isHome={team.id === matchup.home.id}
+                    count={allocation[team.id] ?? 0}
+                    canAdd={spare > 0 && !locked && props.canSubmit}
+                    disabled={locked || !props.canSubmit}
+                    onAdjust={adjust}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
 
         {confirming ? (
           <ConfirmationStep
-            choices={choices}
-            slots={props.slots}
-            teamsById={teamsById}
-            unpicked={unpicked}
+            chosen={chosen}
+            spare={spare}
+            autoAssign={props.autoAssign}
             pending={pending}
             onBack={() => setConfirming(false)}
           />
         ) : (
           <button
             type="button"
-            disabled={!props.canSubmit || chosenCount === 0 || locked}
+            disabled={!props.canSubmit || locked || used === 0}
             onClick={() => setConfirming(true)}
             className="sticky bottom-4 rounded-lg bg-emerald-600 px-4 py-3 text-base font-semibold text-white disabled:opacity-40"
           >
-            {locked ? "Locked" : `Review ${chosenCount} pick${chosenCount === 1 ? "" : "s"}`}
+            {locked ? "Locked" : `Review ${used} pick${used === 1 ? "" : "s"}`}
           </button>
         )}
       </form>
@@ -247,41 +187,134 @@ export function MakePicksForm(props: {
   );
 }
 
-/**
- * SS9's confirmation step, restating every choice in the spec's own words:
- * "Pick 3 → Broncos to LOSE (a tie eliminates)".
- */
+/** The running total: how many picks are placed, and how many are still spare. */
+function PickBudget(props: { used: number; total: number }) {
+  const spare = props.total - props.used;
+  return (
+    <div className="sticky top-0 z-10 flex items-center justify-between gap-3 rounded-xl border border-neutral-700 bg-neutral-950/95 px-4 py-3 backdrop-blur">
+      <p className="text-sm">
+        <span className="text-lg font-semibold tabular-nums">
+          {props.used}/{props.total}
+        </span>{" "}
+        <span className="text-neutral-400">picks placed</span>
+      </p>
+      <p
+        className={`text-xs font-medium ${spare === 0 ? "text-emerald-400" : "text-amber-300"}`}
+      >
+        {spare === 0 ? "all picks used" : `${spare} still spare`}
+      </p>
+    </div>
+  );
+}
+
+function TeamRow(props: {
+  team: TeamView;
+  isHome: boolean;
+  count: number;
+  canAdd: boolean;
+  disabled: boolean;
+  onAdjust: (teamId: string, delta: number) => void;
+}) {
+  const { team, count } = props;
+
+  return (
+    <div
+      className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5 ${
+        count > 0 ? "border-emerald-500 bg-emerald-950/50" : "border-neutral-700 bg-neutral-900"
+      }`}
+    >
+      <div className="min-w-0">
+        <p className="truncate text-sm">
+          <span className="font-semibold">{team.abbreviation}</span>{" "}
+          <span className="text-neutral-500">{props.isHome ? "vs" : "at"}</span>{" "}
+          <span className="text-neutral-400">{team.name}</span>
+        </p>
+        <p className="mt-0.5 flex items-center gap-2 text-[11px]">
+          {count > 0 ? (
+            <span className="font-bold text-emerald-300">
+              {count} to LOSE
+            </span>
+          ) : null}
+          {team.seasonUses > 0 ? (
+            <span className="text-neutral-500">
+              used {team.seasonUses}× this season
+            </span>
+          ) : null}
+        </p>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-1">
+        <button
+          type="button"
+          aria-label={`Remove a pick from ${team.name}`}
+          disabled={props.disabled || count === 0}
+          onClick={() => props.onAdjust(team.id, -1)}
+          className="h-9 w-9 rounded-lg border border-neutral-700 text-lg font-semibold disabled:opacity-30"
+        >
+          −
+        </button>
+        <span className="w-6 text-center text-base font-semibold tabular-nums">{count}</span>
+        <button
+          type="button"
+          aria-label={`Add a pick to ${team.name}`}
+          disabled={props.disabled || !props.canAdd}
+          onClick={() => props.onAdjust(team.id, 1)}
+          className="h-9 w-9 rounded-lg border border-neutral-700 text-lg font-semibold disabled:opacity-30"
+        >
+          +
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** SS9's confirmation step: the full recap, in the spec's own words. */
 function ConfirmationStep(props: {
-  choices: Record<string, string>;
-  slots: SlotView[];
-  teamsById: Record<string, TeamView>;
-  unpicked: SlotView[];
+  chosen: Array<{ team: TeamView; count: number }>;
+  spare: number;
+  autoAssign: AutoAssignSummary;
   pending: boolean;
   onBack: () => void;
 }) {
+  const total = props.chosen.reduce((sum, entry) => sum + entry.count, 0);
+
   return (
     <section className="sticky bottom-4 rounded-xl border border-emerald-700 bg-neutral-950 p-4 shadow-lg">
       <h2 className="text-sm font-semibold">Confirm your picks</h2>
+
       <ul className="mt-3 flex flex-col gap-2">
-        {props.slots
-          .filter((slot) => props.choices[slot.id])
-          .map((slot) => {
-            const team = props.teamsById[props.choices[slot.id]!];
-            return (
-              <li key={slot.id} className="text-sm">
-                <span className="font-semibold">{slot.label}</span> →{" "}
-                <span className="font-semibold text-emerald-300">{team?.name}</span> to{" "}
-                <span className="font-bold">LOSE</span>{" "}
-                <span className="text-neutral-400">(a tie eliminates)</span>
-              </li>
-            );
-          })}
+        {props.chosen.map(({ team, count }) => (
+          <li key={team.id} className="text-sm">
+            <span className="font-semibold tabular-nums">{count} ×</span>{" "}
+            <span className="font-semibold text-emerald-300">{team.name}</span> to{" "}
+            <span className="font-bold">LOSE</span>{" "}
+            <span className="text-neutral-400">(a tie eliminates)</span>
+          </li>
+        ))}
       </ul>
 
-      {props.unpicked.length > 0 ? (
-        <p className="mt-3 rounded-lg bg-amber-950/50 px-3 py-2 text-xs text-amber-200">
-          {props.unpicked.map((slot) => slot.label).join(", ")} left blank — these will be
-          auto-assigned at lock.
+      <p className="mt-3 border-t border-neutral-800 pt-3 text-xs text-neutral-400">
+        {total} pick{total === 1 ? "" : "s"} placed across {props.chosen.length} team
+        {props.chosen.length === 1 ? "" : "s"}.
+      </p>
+
+      {props.spare > 0 ? (
+        <p
+          className={`mt-2 rounded-lg px-3 py-2 text-xs ${
+            props.autoAssign.eliminate > 0
+              ? "bg-red-950/60 text-red-200"
+              : "bg-amber-950/50 text-amber-200"
+          }`}
+        >
+          {props.spare} pick{props.spare === 1 ? "" : "s"} left spare. At lock{" "}
+          {props.autoAssign.eliminate > 0 ? (
+            <>
+              up to <strong>{props.autoAssign.eliminate}</strong> of them would be{" "}
+              <strong>ELIMINATED</strong> — there is no previous pick to repeat.
+            </>
+          ) : (
+            <>they would repeat last week&apos;s team where it is playing.</>
+          )}
         </p>
       ) : null}
 
@@ -326,7 +359,11 @@ function LockBanner(props: {
       {remaining !== null ? (
         <p
           className={`text-right text-sm font-semibold tabular-nums ${
-            remaining <= 0 ? "text-red-400" : remaining < 6 * 3600_000 ? "text-amber-300" : "text-neutral-200"
+            remaining <= 0
+              ? "text-red-400"
+              : remaining < 6 * 3600_000
+                ? "text-amber-300"
+                : "text-neutral-200"
           }`}
         >
           {formatCountdown(remaining)}

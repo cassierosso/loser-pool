@@ -6,6 +6,8 @@ import { withTransaction, type Database } from "@/lib/db/client";
 import { games, pickSlots, selections, teams, weekStates, type UserRow } from "@/lib/db/schema";
 import { validateSelection } from "@/lib/rules/validate";
 
+import { allocateSlots, type Allocation } from "./allocate";
+
 /**
  * SS5.3 / SS9 -- submitting picks.
  *
@@ -212,4 +214,194 @@ export async function countMissingPicks(
       ),
     );
   return row?.n ?? 0;
+}
+
+/**
+ * SS9 -- submitting an aggregate allocation ("2 on Dallas, 1 on Tampa Bay").
+ *
+ * The client sends counts per team and never names a pick slot; the mapping onto
+ * this user's slots happens here, on the server, from rows read out of the
+ * database. That removes a whole category of tampering by construction -- there
+ * is no slot id in the request to point at somebody else's entry.
+ *
+ * Every resulting per-slot pick still goes through validateSelection, and the
+ * whole allocation is applied in one transaction or not at all.
+ */
+export async function submitAllocations(
+  db: Database,
+  input: { user: UserRow; allocations: Allocation[]; now?: Date; weekStateId?: string },
+  recorder: AuditRecorder,
+): Promise<SubmitResult> {
+  const now = input.now ?? new Date();
+  const config = await getLeagueConfig(db);
+
+  const [week] = input.weekStateId
+    ? await db.select().from(weekStates).where(eq(weekStates.id, input.weekStateId)).limit(1)
+    : await db.select().from(weekStates).where(eq(weekStates.status, "open")).limit(1);
+
+  if (!week) {
+    return {
+      ok: false,
+      errors: [
+        { slotId: "", slotLabel: "", code: "week_not_open", reason: "No week is open for picks." },
+      ],
+    };
+  }
+
+  const allSlots = await db.select().from(pickSlots).where(eq(pickSlots.userId, input.user.id));
+  const aliveSlots = allSlots.filter((slot) => slot.status === "alive");
+  const slotsById = new Map(allSlots.map((slot) => [slot.id, slot]));
+
+  const existing = await db
+    .select()
+    .from(selections)
+    .where(
+      and(
+        eq(selections.weekStateId, week.id),
+        inArray(
+          selections.pickSlotId,
+          allSlots.length > 0 ? allSlots.map((slot) => slot.id) : [""],
+        ),
+      ),
+    );
+  const existingBySlot = new Map(existing.map((row) => [row.pickSlotId, row]));
+
+  const outcome = allocateSlots({
+    aliveSlots,
+    existingBySlotId: Object.fromEntries(existing.map((row) => [row.pickSlotId, row.teamId])),
+    allocations: input.allocations,
+  });
+
+  if (!outcome.ok) {
+    return {
+      ok: false,
+      errors: [{ slotId: "", slotLabel: "", code: outcome.code, reason: outcome.message }],
+    };
+  }
+
+  const weekGames = await db.select().from(games).where(eq(games.weekStateId, week.id));
+  const errors: SubmitFailure[] = [];
+  const valid: Array<{ slotId: string; teamId: string; gameId: string; slotLabel: string }> = [];
+
+  for (const assignment of outcome.result.assignments) {
+    const slot = slotsById.get(assignment.slotId);
+    if (!slot) continue;
+
+    const check = validateSelection({
+      config,
+      week,
+      pickSlot: slot,
+      requestingUserId: input.user.id,
+      user: { id: input.user.id, picksPurchased: input.user.picksPurchased },
+      teamId: assignment.teamId,
+      games: weekGames,
+      otherSelectionsThisWeekForUser: [],
+      now,
+    });
+
+    if (!check.ok) {
+      errors.push({ slotId: slot.id, slotLabel: slot.label, code: check.code, reason: check.reason });
+      continue;
+    }
+
+    const game = weekGames.find(
+      (candidate) =>
+        candidate.homeTeamId === assignment.teamId || candidate.awayTeamId === assignment.teamId,
+    );
+
+    if (!game) {
+      errors.push({
+        slotId: slot.id,
+        slotLabel: slot.label,
+        code: "team_not_playing",
+        reason: `That team is not playing in ${week.displayLabel}.`,
+      });
+      continue;
+    }
+
+    valid.push({ slotId: slot.id, teamId: assignment.teamId, gameId: game.id, slotLabel: slot.label });
+  }
+
+  if (errors.length > 0) return { ok: false, errors };
+
+  await withTransaction(db, async (tx) => {
+    for (const entry of valid) {
+      await tx
+        .insert(selections)
+        .values({
+          pickSlotId: entry.slotId,
+          weekStateId: week.id,
+          seasonType: week.seasonType,
+          weekNumber: week.weekNumber,
+          teamId: entry.teamId,
+          gameId: entry.gameId,
+          submittedAt: now,
+          submittedByUserId: input.user.id,
+          wasAutoAssigned: false,
+        })
+        .onConflictDoUpdate({
+          target: [selections.pickSlotId, selections.weekStateId],
+          set: {
+            teamId: entry.teamId,
+            gameId: entry.gameId,
+            submittedAt: now,
+            submittedByUserId: input.user.id,
+            wasAutoAssigned: false,
+          },
+        });
+    }
+
+    // Reducing a count removes the surplus pick. That slot is simply blank
+    // again and will be auto-assigned at lock like any other (SS5.2).
+    if (outcome.result.cleared.length > 0) {
+      await tx
+        .delete(selections)
+        .where(
+          and(
+            eq(selections.weekStateId, week.id),
+            inArray(selections.pickSlotId, outcome.result.cleared),
+          ),
+        );
+    }
+  });
+
+  const teamRows = await db.select().from(teams);
+  const abbrById = new Map(teamRows.map((team) => [team.id, team.abbreviation]));
+
+  // SS7.1: submitting, editing, and clearing are all logged.
+  for (const entry of valid) {
+    const previous = existingBySlot.get(entry.slotId);
+    if (previous && previous.teamId === entry.teamId && !previous.wasAutoAssigned) continue;
+
+    await recorder.record({
+      actorUserId: input.user.id,
+      actorRole: input.user.role === "admin" ? "admin" : "player",
+      action: previous ? "selection.edit" : "selection.submit",
+      targetType: "selection",
+      targetId: entry.slotId,
+      targetLabel: `${input.user.displayName} — ${entry.slotLabel} — ${week.displayLabel}`,
+      beforeJson: previous ? { team: abbrById.get(previous.teamId) } : {},
+      afterJson: { team: abbrById.get(entry.teamId) },
+      reason: previous ? "Player changed their pick" : "Player submitted a pick",
+      selfAffecting: false,
+    });
+  }
+
+  for (const slotId of outcome.result.cleared) {
+    const previous = existingBySlot.get(slotId);
+    await recorder.record({
+      actorUserId: input.user.id,
+      actorRole: input.user.role === "admin" ? "admin" : "player",
+      action: "selection.clear",
+      targetType: "selection",
+      targetId: slotId,
+      targetLabel: `${input.user.displayName} — ${slotsById.get(slotId)?.label} — ${week.displayLabel}`,
+      beforeJson: previous ? { team: abbrById.get(previous.teamId) } : {},
+      afterJson: {},
+      reason: "Player removed a pick",
+      selfAffecting: false,
+    });
+  }
+
+  return { ok: true, saved: valid.length, weekLabel: week.displayLabel };
 }

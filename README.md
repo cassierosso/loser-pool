@@ -310,23 +310,46 @@ Email goes through a small `Mailer` port: the console in development, Resend whe
 
 ### Make Picks
 
-The copy works hard on the one rule everyone gets wrong: you are picking the team **to lose**, and
-a tie kills the pick too. That appears on the heading, on each selected option, and again in the
-confirmation step, which restates every choice in the spec's own words — *"Pick 3 → Broncos to
-LOSE (a tie eliminates)"*.
+Entrants think in totals, not in slots — *"I have five picks, put two on Dallas"* — so the screen
+is one list of the week's games with a **+/− stepper on every team** and a running budget at the
+top: `5/10 picks placed · 5 still spare`. Confirming shows the full recap:
 
-- A live countdown to lock, and once it passes the form says so and refuses to submit — rather
-  than letting someone fill it in and be turned away at the end.
-- Teams not playing this week are simply absent, so a team on bye cannot be chosen.
-- A badge shows how many times that slot has already used each team. Informational only: under
-  `teamReuse: "unlimited"` nothing is blocked, including two of your own slots on one team.
-- If you submit nothing, the screen says what will be auto-assigned **and why**, computed by the
-  real §5.2 engine so the preview cannot drift from what `lockWeek` actually does.
+```
+2 × Arizona Cardinals to LOSE (a tie eliminates)
+2 × Seattle Seahawks   to LOSE (a tie eliminates)
+1 × Tampa Bay Buccaneers to LOSE (a tie eliminates)
+5 picks placed across 3 teams.
+5 picks left spare. At lock they would repeat last week's team where it is playing.
+```
+
+The copy works hard on the one rule everyone gets wrong: you are picking teams **to lose**, and a
+tie kills the pick too. It appears on the heading, on every allocated team, and again in the recap.
+
+**Which slot gets which team is decided on the server**, in `lib/picks/allocate.ts`. That is not an
+implementation detail: a `pick_slot` is a persistent entity with its own history, and §5.2 repeats
+*that slot's* last team when someone misses a deadline. The rule is minimum churn — a slot already
+holding a team that is still allocated keeps it, and only genuinely new picks land on free slots.
+Re-submitting an identical allocation therefore changes nothing and logs nothing. Reducing a count
+removes the surplus pick, and that slot is simply blank again.
+
+A useful consequence: **the request contains no slot id at all**, only counts per team. There is
+nothing in it to aim at another entrant's slots.
+
+Other behaviour:
+
+- A live countdown to lock; once it passes, the form says so and refuses to submit.
+- Teams not playing this week are absent, so a team on bye cannot be chosen.
+- A badge shows how many times *you* have used each team this season. Informational only: under
+  `teamReuse: "unlimited"` nothing is blocked, including several picks on one team.
+- Leave picks spare and the recap says what happens to them at lock — and warns loudly when the
+  answer is elimination — computed by the real §5.2 engine so it cannot drift from `lockWeek`.
 
 ### Decisions taken in Phase 4
 
 - **The whole form saves or none of it does.** §9 says save all slots in one submit; a partial
   save would leave an entrant believing they had picked when they had not.
+- **Picks are allocated by team, not by slot**, with the slot mapping done server-side and
+  optimised for stability so that §5.2's repeat-last-week keeps following the same slot.
 - **The Make Picks query never loads another entrant's selections.** Not filtered on render —
   never fetched. That is what makes acceptance test 22 true of the payload rather than of the UI.
 - **The session cookie is set on the redirect response itself.** Setting it through the `cookies()`

@@ -49,6 +49,14 @@ export interface MakePicksData {
   selectionBySlotId: Record<string, SelectionRow>;
   /** slotId -> teamId -> how many times this slot has already used that team. */
   teamUsesBySlot: Record<string, Record<string, number>>;
+  /**
+   * teamId -> how many times this ENTRANT has used that team, across all their
+   * slots. The aggregate screen picks by team rather than by slot, so this is
+   * the badge that means anything there. Informational only (SS5.3).
+   */
+  seasonTeamUses: Record<string, number>;
+  /** teamId -> how many picks are currently on that team this week. */
+  allocationByTeamId: Record<string, number>;
   /** SS9: what happens to each slot if the user submits nothing. */
   autoAssignPreview: Record<string, AutoAssignPreviewEntry>;
   eliminatedSlots: PickSlotRow[];
@@ -91,6 +99,8 @@ export async function getMakePicksData(db: Database, user: UserRow): Promise<Mak
       teamsById,
       selectionBySlotId: {},
       teamUsesBySlot: {},
+      seasonTeamUses: {},
+      allocationByTeamId: {},
       autoAssignPreview: {},
       eliminatedSlots,
     };
@@ -122,6 +132,19 @@ export async function getMakePicksData(db: Database, user: UserRow): Promise<Mak
 
   const selectionBySlotId = Object.fromEntries(mine.map((row) => [row.pickSlotId, row]));
 
+  const allocationByTeamId: Record<string, number> = {};
+  for (const row of mine) {
+    allocationByTeamId[row.teamId] = (allocationByTeamId[row.teamId] ?? 0) + 1;
+  }
+
+  const teamUsesBySlot = await loadTeamUses(db, slotIds);
+  const seasonTeamUses: Record<string, number> = {};
+  for (const uses of Object.values(teamUsesBySlot)) {
+    for (const [teamId, count] of Object.entries(uses)) {
+      seasonTeamUses[teamId] = (seasonTeamUses[teamId] ?? 0) + count;
+    }
+  }
+
   return {
     week,
     config,
@@ -129,7 +152,9 @@ export async function getMakePicksData(db: Database, user: UserRow): Promise<Mak
     matchups,
     teamsById,
     selectionBySlotId,
-    teamUsesBySlot: await loadTeamUses(db, slotIds),
+    teamUsesBySlot,
+    seasonTeamUses,
+    allocationByTeamId,
     autoAssignPreview: await buildAutoAssignPreview(db, { week, config, slots, weekGames }),
     eliminatedSlots,
   };

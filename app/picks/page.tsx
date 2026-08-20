@@ -6,7 +6,7 @@ import { getDatabase } from "@/lib/db/client";
 import { getMakePicksData } from "@/lib/picks/queries";
 import { formatKickoff } from "@/lib/time";
 
-import { MakePicksForm, type MatchupView, type SlotView } from "./make-picks-form";
+import { MakePicksForm, type AutoAssignSummary, type MatchupView } from "./make-picks-form";
 
 export const dynamic = "force-dynamic";
 
@@ -22,33 +22,33 @@ export default async function PicksPage() {
   const { db } = await getDatabase();
   const data = await getMakePicksData(db, user);
 
+  const team = (row: { id: string; abbreviation: string; displayName: string }) => ({
+    id: row.id,
+    abbreviation: row.abbreviation,
+    name: row.displayName,
+    seasonUses: data.seasonTeamUses[row.id] ?? 0,
+  });
+
   const matchups: MatchupView[] = data.matchups.map((matchup) => ({
     gameId: matchup.game.id,
     kickoffAt: matchup.game.kickoffAt.toISOString(),
     kickoffLabel: formatKickoff(matchup.game.kickoffAt),
-    home: { id: matchup.home.id, abbreviation: matchup.home.abbreviation, name: matchup.home.displayName },
-    away: { id: matchup.away.id, abbreviation: matchup.away.abbreviation, name: matchup.away.displayName },
+    home: team(matchup.home),
+    away: team(matchup.away),
   }));
 
-  const slots: SlotView[] = data.slots.map((slot) => {
-    const preview = data.autoAssignPreview[slot.id];
-    return {
-      id: slot.id,
-      label: slot.label,
-      selectedTeamId: data.selectionBySlotId[slot.id]?.teamId ?? null,
-      wasAutoAssigned: data.selectionBySlotId[slot.id]?.wasAutoAssigned ?? false,
-      teamUses: data.teamUsesBySlot[slot.id] ?? {},
-      autoAssign: preview
-        ? {
-            explanation: preview.explanation,
-            teamAbbreviation: preview.teamId
-              ? (data.teamsById[preview.teamId]?.abbreviation ?? null)
-              : null,
-            willEliminate: preview.resolution === "eliminate",
-          }
-        : null,
-    };
-  });
+  // SS9: say what happens to picks left unallocated. Counted from the real
+  // SS5.2 engine over this entrant's slots, so the warning cannot drift from
+  // what lockWeek will actually do.
+  const autoAssign: AutoAssignSummary = Object.values(data.autoAssignPreview).reduce(
+    (summary, entry) => {
+      if (entry.resolution === "repeat_last_week") summary.repeat += 1;
+      else if (entry.resolution === "eliminate") summary.eliminate += 1;
+      else summary.other += 1;
+      return summary;
+    },
+    { repeat: 0, eliminate: 0, other: 0 } as AutoAssignSummary,
+  );
 
   return (
     <main className="mx-auto flex max-w-2xl flex-col gap-6 px-4 py-6 sm:px-6">
@@ -85,7 +85,9 @@ export default async function PicksPage() {
           lockAt={data.week.lockAt?.toISOString() ?? null}
           lockLabel={data.week.lockAt ? formatKickoff(data.week.lockAt) : null}
           matchups={matchups}
-          slots={slots}
+          aliveCount={data.slots.length}
+          initialAllocation={data.allocationByTeamId}
+          autoAssign={autoAssign}
           canSubmit={user.picksPurchased > 0}
         />
       )}
