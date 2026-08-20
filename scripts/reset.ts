@@ -1,3 +1,5 @@
+import { sql } from "drizzle-orm";
+
 import { createDatabase, type Database } from "@/lib/db/client";
 import { games, leagues, pickSlots, selections, teams, users, weekStates } from "@/lib/db/schema";
 
@@ -7,8 +9,11 @@ import { loadEnv } from "./env";
  * Deletes every row in foreign-key-safe order. Used by the seed so that seeding
  * is idempotent by construction rather than by upsert gymnastics.
  *
- * Note for Phase 6: audit_log is append-only and must NOT be added here. When
- * the log exists, resetting a database means dropping and recreating it.
+ * audit_log is append-only and is deliberately NOT listed. There is no code
+ * path anywhere that deletes an audit entry, and adding one here "just for
+ * development" would be the first hole in the thing the log exists to
+ * guarantee. Starting over means dropping the database, not emptying the log --
+ * see dropEverything below.
  */
 export async function truncateAll(db: Database): Promise<void> {
   await db.delete(selections);
@@ -33,4 +38,20 @@ async function main(): Promise<void> {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   await main();
+}
+
+/**
+ * Drops the whole schema and starts again.
+ *
+ * This is how a development database is reset, precisely because truncateAll
+ * cannot touch audit_log. Dropping a database is a different act from deleting
+ * rows out of a log: nobody is left holding a chain that no longer matches
+ * their copy, because there is no chain left at all.
+ */
+export async function dropEverything(db: Database): Promise<void> {
+  await db.execute(sql`drop schema if exists public cascade`);
+  await db.execute(sql`create schema public`);
+  // Drizzle records applied migrations in its own schema; it has to go too, or
+  // the next migrate run believes everything is already applied.
+  await db.execute(sql`drop schema if exists drizzle cascade`);
 }

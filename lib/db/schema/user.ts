@@ -34,6 +34,12 @@ export const users = pgTable(
      * pick_slot rows must keep resolving to a real person forever.
      */
     deactivatedAt: timestamp("deactivated_at", { withTimezone: true }),
+    /**
+     * SS7.5: an admin action after lock raises a banner "until every member has
+     * viewed the log screen once, or for seven days, whichever is longer". This
+     * is how we know who has looked.
+     */
+    logLastViewedAt: timestamp("log_last_viewed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

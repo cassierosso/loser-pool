@@ -1,4 +1,8 @@
 import { AppShell, ResultBadge } from "@/components/app-shell";
+import { ChainBadge } from "@/components/chain-badge";
+import { getChainStatus } from "@/lib/audit/badge";
+import { getPostLockAdminNotice } from "@/lib/audit/banner";
+import Link from "next/link";
 import { requireUser } from "@/lib/auth/current-user";
 import { getDatabase } from "@/lib/db/client";
 import { formatKickoff } from "@/lib/time";
@@ -13,7 +17,12 @@ export const dynamic = "force-dynamic";
 export default async function BoardPage() {
   const user = await requireUser();
   const { db } = await getDatabase();
-  const board = await getLeagueBoard(db, user);
+  const [board, chainStatus] = await Promise.all([
+    getLeagueBoard(db, user),
+    // SS7.4: verified on League Board load, cached five minutes.
+    getChainStatus(),
+  ]);
+  const postLock = await getPostLockAdminNotice(db, board.league.seasonYear);
 
   const picksByUser = new Map<string, typeof board.picks>();
   for (const pick of board.picks) {
@@ -28,6 +37,28 @@ export default async function BoardPage() {
       subtitle={`${board.league.name} · ${board.league.seasonYear}`}
       current="/board"
     >
+      <ChainBadge status={chainStatus} />
+
+      {postLock.show ? (
+        <section role="alert" className="rounded-xl border-2 border-amber-500 bg-amber-950/60 px-4 py-3">
+          <h2 className="text-sm font-bold text-amber-100">
+            {postLock.count} admin action{postLock.count === 1 ? "" : "s"} taken after picks locked
+          </h2>
+          <p className="mt-1 text-sm text-amber-200/90">
+            Changes were made while this week&apos;s picks were already final.{" "}
+            <Link href="/log" className="font-semibold underline underline-offset-4">
+              Read the league log
+            </Link>{" "}
+            to see exactly what and why.
+          </p>
+          {postLock.unseenBy > 0 ? (
+            <p className="mt-1 text-xs text-amber-300/80">
+              {postLock.unseenBy} member{postLock.unseenBy === 1 ? " has" : "s have"} not looked yet.
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+
       {board.league.seasonStatus === "closed" && board.league.seasonOutcome ? (
         <section className="rounded-xl border border-emerald-600 bg-emerald-950/50 px-4 py-3">
           <h2 className="text-sm font-semibold text-emerald-100">

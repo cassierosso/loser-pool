@@ -9,7 +9,7 @@ import {
   type ProvisionWarning,
   type RosterEntry,
 } from "@/lib/admin";
-import { noopAuditRecorder } from "@/lib/audit/port";
+import { createAuditRecorder } from "@/lib/audit/writer";
 import { getLeagueConfig } from "@/lib/config";
 import { createDatabase, type Database } from "@/lib/db/client";
 import { users, type UserRow } from "@/lib/db/schema";
@@ -135,7 +135,7 @@ async function main(): Promise<void> {
           role: argString(args, "role", "player") === "admin" ? "admin" : "player",
         },
         actor,
-        noopAuditRecorder,
+        createAuditRecorder(db),
       );
       if (!result.ok) throw new Error(result.error.message);
       console.log(`Created ${result.value.displayName} <${result.value.email}> with 0 picks.`);
@@ -149,7 +149,7 @@ async function main(): Promise<void> {
         db,
         { userId: user.id, picksPurchased: argInt(args, "picks", -1) },
         actor,
-        noopAuditRecorder,
+        createAuditRecorder(db),
       );
 
       if (!result.ok) {
@@ -187,7 +187,7 @@ async function main(): Promise<void> {
           ...(typeof note === "string" ? { paymentNote: note } : {}),
         },
         actor,
-        noopAuditRecorder,
+        createAuditRecorder(db),
       );
       if (!result.ok) throw new Error(result.error.message);
       console.log(

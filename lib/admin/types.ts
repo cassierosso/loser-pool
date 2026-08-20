@@ -8,7 +8,8 @@ export type ProvisionErrorCode =
   | "picks_negative"
   | "exceeds_max"
   | "picks_frozen"
-  | "reduction_blocked";
+  | "reduction_blocked"
+  | "second_admin_required";
 
 export interface BlockingSlot {
   slotId: string;

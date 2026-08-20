@@ -1,4 +1,4 @@
-import { noopAuditRecorder } from "@/lib/audit/port";
+import { createAuditRecorder } from "@/lib/audit/writer";
 import { getDatabase } from "@/lib/db/client";
 import { createEspnProvider } from "@/lib/providers/espn";
 import type { ScheduleProvider } from "@/lib/providers/types";
@@ -52,8 +52,7 @@ export async function createJobContext(
   return {
     db,
     provider: overrides.provider ?? createEspnProvider(),
-    // Phase 6 swaps in the hash-chained writer; jobs already emit their entries.
-    recorder: noopAuditRecorder,
+    recorder: createAuditRecorder(db),
     now: overrides.now ?? new Date(),
   };
 }

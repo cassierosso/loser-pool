@@ -36,13 +36,26 @@ export interface AuditEvent {
   selfAffecting: boolean;
 }
 
+import type { Database } from "@/lib/db/client";
+
 export interface AuditRecorder {
-  record(event: AuditEvent): Promise<void>;
+  /**
+   * `tx` matters more than it looks. A caller already inside a transaction MUST
+   * pass it, for two reasons: the entry then commits or rolls back with the
+   * change it describes -- SS7.1 allows no silent paths, and an action without
+   * its log entry is exactly that -- and on a single-connection pool, opening a
+   * second transaction from inside the first simply deadlocks.
+   */
+  record(event: AuditEvent, tx?: Database): Promise<void>;
 }
 
-/** Phase 1 default. Phase 6 replaces this with the real chained writer. */
+/**
+ * The no-op that carried the app from Phase 1 to Phase 6. Kept only for tests
+ * that do not care about logging; every real path now uses the hash-chained
+ * writer in ./writer.ts.
+ */
 export const noopAuditRecorder: AuditRecorder = {
-  async record() {
+  async record(_event?: AuditEvent, _tx?: Database) {
     /* intentionally empty until Phase 6 (SS7.3) */
   },
 };
@@ -60,7 +73,7 @@ export function createCollectingAuditRecorder(): CollectingAuditRecorder {
   const events: AuditEvent[] = [];
   return {
     events,
-    async record(event) {
+    async record(event: AuditEvent, _tx?: Database) {
       events.push(event);
     },
   };

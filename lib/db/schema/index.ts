@@ -7,3 +7,4 @@ export * from "./pick-slot";
 export * from "./game";
 export * from "./selection";
 export * from "./auth";
+export * from "./audit";

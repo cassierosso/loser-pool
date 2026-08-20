@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import { eq } from "drizzle-orm";
 
-import { noopAuditRecorder } from "@/lib/audit/port";
+import { createAuditRecorder } from "@/lib/audit/writer";
 import {
   createUser,
   getRoster,
@@ -29,7 +29,7 @@ import {
 import { allWeekDescriptors, REGULAR_SEASON_WEEKS } from "@/lib/week/ordinal";
 
 import { argInt, argString, loadEnv, parseArgs } from "../env";
-import { truncateAll } from "../reset";
+import { dropEverything, truncateAll } from "../reset";
 import { createRng } from "./rng";
 import {
   generatePostseason,
@@ -239,6 +239,9 @@ export async function seed(db: Database, options: SeedOptions): Promise<void> {
     override: true,
   };
 
+  // The seed provisions through the real service, so it writes real audit
+  // entries too -- which is what gives the League Log something to show.
+  const recorder = createAuditRecorder(db);
   const createdUsers: UserRow[] = [];
   for (const fixture of FIXTURE_USERS) {
     const created = await createUser(
@@ -251,7 +254,7 @@ export async function seed(db: Database, options: SeedOptions): Promise<void> {
         paymentNote: fixture.paymentNote,
       },
       systemActor,
-      noopAuditRecorder,
+      recorder,
     );
     if (!created.ok) throw new Error(`Seed failed creating ${fixture.email}: ${created.error.message}`);
 
@@ -259,7 +262,7 @@ export async function seed(db: Database, options: SeedOptions): Promise<void> {
       db,
       { userId: created.value.id, picksPurchased: fixture.picks },
       systemActor,
-      noopAuditRecorder,
+      recorder,
     );
     if (!provisioned.ok) {
       throw new Error(`Seed failed provisioning ${fixture.email}: ${provisioned.error.message}`);
@@ -418,6 +421,9 @@ async function main(): Promise<void> {
   );
 
   try {
+    // A full reset, not a truncate: audit_log is append-only and nothing may
+    // delete from it, so starting over means recreating the schema.
+    await dropEverything(handle.db);
     await runMigrations(handle);
     await seed(handle.db, options);
 

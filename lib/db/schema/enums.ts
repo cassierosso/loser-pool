@@ -8,6 +8,18 @@ import { pgEnum } from "drizzle-orm/pg-core";
 
 export const userRoleEnum = pgEnum("user_role", ["player", "admin"]);
 
+/** SS7.2: the log also records actions taken by the system itself. */
+export const actorRoleEnum = pgEnum("actor_role", ["player", "admin", "system"]);
+
+export const auditTargetTypeEnum = pgEnum("audit_target_type", [
+  "user",
+  "pick_slot",
+  "selection",
+  "game",
+  "league",
+  "job",
+]);
+
 export const paymentStatusEnum = pgEnum("payment_status", ["unpaid", "paid", "comped"]);
 
 export const pickSlotStatusEnum = pgEnum("pick_slot_status", ["alive", "eliminated"]);

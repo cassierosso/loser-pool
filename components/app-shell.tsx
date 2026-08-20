@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { signOutAction } from "@/app/actions/auth";
+import { getCurrentUser } from "@/lib/auth/current-user";
 
 /**
  * Shared chrome. SS9 is mobile-first: the nav is a scrollable strip of pills
@@ -11,11 +12,14 @@ const LINKS = [
   { href: "/board", label: "League Board" },
   { href: "/results", label: "Week Results" },
   { href: "/history", label: "My Picks" },
-  // SS7.5's League Log arrives in Phase 6 and belongs in the main nav, not
-  // buried in settings.
+  // SS7.5: the League Log gets its own screen "linked from the main nav, not
+  // buried in settings", and is readable by every member.
+  { href: "/log", label: "League Log" },
 ];
 
-export function AppShell({
+
+
+export async function AppShell({
   title,
   subtitle,
   current,
@@ -26,6 +30,11 @@ export function AppShell({
   current: string;
   children: React.ReactNode;
 }) {
+  const viewer = await getCurrentUser();
+  // The admin screen is linked only for admins. That is convenience, not
+  // security -- the page itself calls requireAdmin.
+  const links = viewer?.role === "admin" ? [...LINKS, { href: "/admin", label: "Admin" }] : LINKS;
+
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-5 px-4 py-5 sm:px-6">
       <header className="flex items-start justify-between gap-4">
@@ -42,7 +51,7 @@ export function AppShell({
 
       <nav className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
         <ul className="flex w-max gap-2">
-          {LINKS.map((link) => (
+          {links.map((link) => (
             <li key={link.href}>
               <Link
                 href={link.href}

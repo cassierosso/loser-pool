@@ -271,28 +271,34 @@ export async function setPicksPurchased(
       .where(eq(users.id, user.id))
       .returning();
 
-    await recorder.record({
-      actorUserId: actor.actorUserId,
-      actorRole: actor.actorRole,
-      action: "user.picks_purchased.change",
-      targetType: "user",
-      targetId: user.id,
-      targetLabel: user.displayName,
-      beforeJson: {
-        picksPurchased: user.picksPurchased,
-        slotLabels: existingSlots.map((slot) => slot.label),
+    await recorder.record(
+      {
+        actorUserId: actor.actorUserId,
+        actorRole: actor.actorRole,
+        action: "user.picks_purchased.change",
+        targetType: "user",
+        targetId: user.id,
+        targetLabel: user.displayName,
+        beforeJson: {
+          picksPurchased: user.picksPurchased,
+          slotLabels: existingSlots.map((slot) => slot.label),
+        },
+        afterJson: {
+          picksPurchased: target,
+          slotLabels: existingSlots
+            .filter((slot) => !removed.some((r) => r.id === slot.id))
+            .map((slot) => slot.label)
+            .concat(created.map((slot) => slot.label)),
+          overrideUsed: freeze.frozen,
+        },
+        reason,
+        selfAffecting: actor.actorRole === "admin" && actor.actorUserId === user.id,
       },
-      afterJson: {
-        picksPurchased: target,
-        slotLabels: existingSlots
-          .filter((slot) => !removed.some((r) => r.id === slot.id))
-          .map((slot) => slot.label)
-          .concat(created.map((slot) => slot.label)),
-        overrideUsed: freeze.frozen,
-      },
-      reason,
-      selfAffecting: actor.actorRole === "admin" && actor.actorUserId === user.id,
-    });
+      // Inside the transaction: the entry commits with the change, or not at
+      // all. Passing tx also keeps a single-connection pool from deadlocking
+      // against itself.
+      tx,
+    );
 
     return ok<ProvisionOutcome>({
       user: updatedUser ?? user,

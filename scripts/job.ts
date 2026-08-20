@@ -1,4 +1,4 @@
-import { noopAuditRecorder } from "@/lib/audit/port";
+import { createAuditRecorder } from "@/lib/audit/writer";
 import { createDatabase } from "@/lib/db/client";
 import { isJobName, JOB_NAMES, runJob } from "@/lib/jobs";
 import { createEspnProvider } from "@/lib/providers/espn";
@@ -36,8 +36,7 @@ async function main(): Promise<void> {
       {
         db: handle.db,
         provider: createEspnProvider(),
-        // Phase 6 swaps in the real hash-chained writer.
-        recorder: noopAuditRecorder,
+        recorder: createAuditRecorder(handle.db),
         now: new Date(),
       },
       ordinalArg !== undefined ? { ordinal: ordinalArg } : {},

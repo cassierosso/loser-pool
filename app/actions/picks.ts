@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { requireUser } from "@/lib/auth/current-user";
-import { noopAuditRecorder } from "@/lib/audit/port";
+import { createAuditRecorder } from "@/lib/audit/writer";
 import { getDatabase } from "@/lib/db/client";
 import { submitAllocations, type SubmitFailure } from "@/lib/picks/submit";
 import type { Allocation } from "@/lib/picks/allocate";
@@ -47,8 +47,7 @@ export async function submitPicksAction(
   const result = await submitAllocations(
     db,
     { user, allocations },
-    // Phase 6 swaps in the hash-chained writer; the events are already emitted.
-    noopAuditRecorder,
+    createAuditRecorder(db),
   );
 
   if (!result.ok) {

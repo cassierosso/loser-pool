@@ -15,7 +15,7 @@ Built to `SPEC.md`, one phase at a time.
 | 3 | ESPN provider + the four jobs | **complete** |
 | 4 | Auth and Make Picks | **complete** |
 | 5 | League Board, Week Results, My Picks History | **complete** |
-| 6 | Audit log end to end, then the admin panel | not started |
+| 6 | Audit log end to end, then the admin panel | **complete** (one gap, below) |
 | 7 | Deploy, cron, prior-season dry run | not started |
 
 ## Getting started
@@ -106,6 +106,7 @@ lib/rules/       §5 grading, auto-assignment, validation; §6 end of season —
 lib/providers/   §3 the ESPN provider — the only code that knows its response shape
 lib/jobs/        §8 the four jobs, as plain functions over a JobContext
 lib/views/       §9 read screens: League Board, Week Results, My Picks History
+lib/audit/       §7 the accountability log: hash chain, writer, verifier, export
 fixtures/espn/   Recorded real ESPN responses; tests never call the network
 lib/admin/       §4 provisioning services
 lib/audit/       The §7 port that Phase 6 implements
@@ -436,6 +437,77 @@ rather than punishing the league for a hiccup.
   story. Each row is week, team, opponent, score, and outcome. **The score is written from the
   picked team's side**, so `17-24` always means your team lost by seven — which in this league is
   the good news.
+
+## The accountability log (§7)
+
+> "This is a league of friends arguing about a game, and the admin is one of the players; the
+> audit log is the referee."
+
+### The chain
+
+`entry_hash = sha256(prev_hash ‖ seq ‖ occurred_at ‖ actor ‖ action ‖ target … ‖ reason)`, genesis
+`prev_hash` = 64 zeros, JSON serialised with keys sorted at every depth so the hash is
+reproducible by anyone holding an export.
+
+**One deviation from §7.2, deliberate:** fields are joined with a newline rather than concatenated
+directly. Bare concatenation is ambiguous — action `"a"` + target `"bc"` hashes identically to
+action `"ab"` + target `"c"` — which would let two different histories share a hash. Any
+independent verifier must use the same separator.
+
+**`seq` is not a sequence.** §7.2 demands "strictly increasing, no gaps", and a Postgres sequence
+burns a number on every rolled-back transaction. A hole in the numbering is indistinguishable from
+a deleted row — precisely the tampering the log exists to expose. So `seq` is `max(seq)+1` taken
+under an advisory lock, and there is a test that a failed write leaves no gap.
+
+### Immutability, in the three layers §7.3 asks for
+
+1. **No application path.** One module writes to `audit_log`; nothing anywhere updates or deletes.
+   Acceptance test 30 enforces this by scanning the source, because the claim is about *absence*
+   and you cannot prove absence by trying a few URLs.
+2. **The database refuses.** A `BEFORE UPDATE OR DELETE` trigger raises unconditionally — for the
+   owner too — and a restricted `loser_survivor_app` role holds `INSERT, SELECT` and nothing else.
+   Verified on PostgreSQL 15: grants are exactly `INSERT, SELECT`.
+3. **External anchoring — Phase 6b.** Layers 1 and 2 do not stop the admin, who holds the owner
+   credentials and can rewrite the whole chain. There is a test that does exactly that, and it
+   shows the rewritten log verifying cleanly while its head hash no longer matches what a member
+   wrote down. That is the gap the weekly digest closes.
+
+### Verification
+
+`verifyAuditChain()` walks the log and reports three distinct kinds of tampering separately — an
+altered row (`hash_mismatch`), a deleted one (`seq_gap`), and an inserted or reordered one
+(`broken_link`) — each naming the `seq` where it failed. The tamper tests do the tampering the
+only way it could really be done: as the owner, with the trigger switched off first.
+
+The badge appears on the League Board and the Admin screen, cached five minutes. **A failed result
+is never cached**, so a red badge cannot be made to blink out by getting the timing right, and it
+has no dismiss control at all.
+
+### Visibility
+
+Readable and exportable by **every** member — `requireUser`, never `requireAdmin` (acceptance test
+29). Filterable by actor, action and affected player, defaulting to admin actions only. Exports
+carry `prev_hash` and `entry_hash`, so a snapshot taken today can be checked against the app
+months later. Self-affecting entries render in high contrast reading "Admin action affecting their
+own entry", and an admin action taken after a week locked raises a banner on the League Board that
+names how many members still have not looked.
+
+### Resetting the database
+
+`truncateAll` deliberately does not touch `audit_log`, so `npm run db:seed` now **drops and
+recreates the schema** instead. Deleting rows out of a log and dropping a database are different
+acts: after the second, nobody is left holding a chain that no longer matches their copy.
+
+## Known gap in Phase 6
+
+**§7.6's second-admin approval queue is not built.** The config flag
+`requireSecondAdminForSelfActions` is honoured, but by *refusing* a self-affecting action and
+telling the admin to ask a colleague — not by entering a `pending_approval` state that a different
+admin later approves, with both actors recorded.
+
+Refusing is the safe direction: nothing takes effect without the second admin either way. But it
+is less useful than the spec asks for, and the default is `false`, so most leagues never meet it.
+Building the queue needs a table for pending actions and an approval screen; say the word.
 
 ## Deferred deliberately
 
