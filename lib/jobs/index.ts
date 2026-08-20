@@ -3,10 +3,14 @@ import { getDatabase } from "@/lib/db/client";
 import { createEspnProvider } from "@/lib/providers/espn";
 import type { ScheduleProvider } from "@/lib/providers/types";
 
+import { createAnchorPublisher } from "@/lib/anchor";
+import { createMailer } from "@/lib/mail";
+
 import { runGradeWeek } from "./grade-week";
 import { lockWeek } from "./lock-week";
 import { syncResults } from "./sync-results";
 import { syncSchedule } from "./sync-schedule";
+import { weeklyDigest } from "./weekly-digest";
 import type { JobContext, JobResult } from "./types";
 
 export * from "./types";
@@ -14,9 +18,16 @@ export { syncSchedule } from "./sync-schedule";
 export { syncResults } from "./sync-results";
 export { lockWeek } from "./lock-week";
 export { runGradeWeek } from "./grade-week";
+export { weeklyDigest } from "./weekly-digest";
 export { authorizeJobRequest } from "./auth";
 
-export const JOB_NAMES = ["syncSchedule", "syncResults", "lockWeek", "gradeWeek"] as const;
+export const JOB_NAMES = [
+  "syncSchedule",
+  "syncResults",
+  "lockWeek",
+  "gradeWeek",
+  "weeklyDigest",
+] as const;
 export type JobName = (typeof JOB_NAMES)[number];
 
 export function isJobName(value: string): value is JobName {
@@ -37,6 +48,10 @@ export async function runJob(
       return lockWeek(ctx, options);
     case "gradeWeek":
       return runGradeWeek(ctx, options);
+    case "weeklyDigest":
+      // SS7.3 layer 3. Its dependencies are resolved here rather than passed
+      // through JobContext, since no other job needs them.
+      return weeklyDigest(ctx, { mailer: createMailer(), anchor: createAnchorPublisher() });
   }
 }
 

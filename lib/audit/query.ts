@@ -115,3 +115,36 @@ export async function countAdminActionsSinceLock(
 
   return row?.n ?? 0;
 }
+
+export type AnchorCheck =
+  | { status: "match"; seq: number; occurredAt: Date }
+  | { status: "mismatch"; seq: number; storedHash: string; occurredAt: Date }
+  | { status: "missing"; seq: number };
+
+/**
+ * SS7.3 -- checking a hash from an old digest email.
+ *
+ * The instruction is "compare this hash to the one shown on the League Board",
+ * and that works the moment the digest lands. A week later the head has moved
+ * on, and the member is holding a (seq, hash) pair for an entry that is now in
+ * the middle of the chain. This is how they check that pair without having to
+ * recompute anything by hand -- which is the difference between an anchor
+ * anyone can use and one only a programmer can.
+ */
+export async function checkAnchoredHash(
+  db: Database,
+  seq: number,
+  hash: string,
+): Promise<AnchorCheck> {
+  const [row] = await db
+    .select({ seq: auditLog.seq, entryHash: auditLog.entryHash, occurredAt: auditLog.occurredAt })
+    .from(auditLog)
+    .where(eq(auditLog.seq, seq))
+    .limit(1);
+
+  if (!row) return { status: "missing", seq };
+
+  return row.entryHash === hash.trim().toLowerCase()
+    ? { status: "match", seq, occurredAt: row.occurredAt }
+    : { status: "mismatch", seq, storedHash: row.entryHash, occurredAt: row.occurredAt };
+}

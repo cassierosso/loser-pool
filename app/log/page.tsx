@@ -4,7 +4,12 @@ import { ChainBadge } from "@/components/chain-badge";
 import { AppShell } from "@/components/app-shell";
 import { getChainStatus } from "@/lib/audit/badge";
 import { markLogViewed } from "@/lib/audit/banner";
-import { listAuditActions, listAuditEntries, type AuditEntryView } from "@/lib/audit/query";
+import {
+  checkAnchoredHash,
+  listAuditActions,
+  listAuditEntries,
+  type AuditEntryView,
+} from "@/lib/audit/query";
 import { requireUser } from "@/lib/auth/current-user";
 import { getDatabase } from "@/lib/db/client";
 import { users } from "@/lib/db/schema";
@@ -22,7 +27,14 @@ export const dynamic = "force-dynamic";
 export default async function LogPage({
   searchParams,
 }: {
-  searchParams: Promise<{ actor?: string; action?: string; player?: string; all?: string }>;
+  searchParams: Promise<{
+    actor?: string;
+    action?: string;
+    player?: string;
+    all?: string;
+    seq?: string;
+    hash?: string;
+  }>;
 }) {
   const viewer = await requireUser();
   const { db } = await getDatabase();
@@ -49,6 +61,12 @@ export default async function LogPage({
     db.select({ id: users.id, displayName: users.displayName }).from(users).orderBy(users.displayName),
   ]);
 
+  // SS7.3: check a (seq, hash) pair out of an old digest email.
+  const anchorCheck =
+    params.seq && params.hash
+      ? await checkAnchoredHash(db, Number.parseInt(params.seq, 10), params.hash)
+      : null;
+
   return (
     <AppShell
       title="League Log"
@@ -60,6 +78,64 @@ export default async function LogPage({
       current="/log"
     >
       <ChainBadge status={status} />
+
+      <section className="rounded-xl border border-neutral-800 p-3">
+        <h2 className="text-sm font-semibold">Check a hash from a digest email</h2>
+        <p className="mt-0.5 text-xs text-neutral-400">
+          The badge above shows the log&apos;s current head, which moves every time anything
+          happens. To check an older email, paste its entry number and hash.
+        </p>
+        <form method="get" className="mt-2 flex flex-col gap-2 sm:flex-row">
+          <input
+            type="number"
+            name="seq"
+            placeholder="entry #"
+            defaultValue={params.seq ?? ""}
+            className="rounded-lg border border-neutral-700 bg-neutral-900 px-2.5 py-2 text-sm sm:w-28"
+            aria-label="Entry number"
+          />
+          <input
+            type="text"
+            name="hash"
+            placeholder="entry hash from the email"
+            defaultValue={params.hash ?? ""}
+            className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-2.5 py-2 font-mono text-xs"
+            aria-label="Entry hash"
+          />
+          <button type="submit" className="rounded-lg bg-neutral-800 px-3 py-2 text-sm font-medium">
+            Check
+          </button>
+        </form>
+
+        {anchorCheck ? (
+          <p
+            role="status"
+            className={`mt-2 rounded-lg px-3 py-2 text-sm ${
+              anchorCheck.status === "match"
+                ? "border border-emerald-800 bg-emerald-950/60 text-emerald-200"
+                : "border-2 border-red-500 bg-red-950 text-red-100"
+            }`}
+          >
+            {anchorCheck.status === "match" ? (
+              <>
+                Entry #{anchorCheck.seq} still has exactly that hash. Nothing at or before it has
+                been altered since your email was sent.
+              </>
+            ) : anchorCheck.status === "missing" ? (
+              <>
+                <strong>Entry #{anchorCheck.seq} no longer exists.</strong> An entry you were sent
+                a hash for has been removed from the log.
+              </>
+            ) : (
+              <>
+                <strong>Entry #{anchorCheck.seq} does not match.</strong> It now hashes to{" "}
+                <span className="font-mono text-xs break-all">{anchorCheck.storedHash}</span>. The
+                log has been altered since your email was sent.
+              </>
+            )}
+          </p>
+        ) : null}
+      </section>
 
       <section className="flex flex-col gap-3 rounded-xl border border-neutral-800 p-3">
         <form className="flex flex-col gap-2 sm:flex-row sm:flex-wrap" method="get">

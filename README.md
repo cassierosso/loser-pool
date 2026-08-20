@@ -16,6 +16,7 @@ Built to `SPEC.md`, one phase at a time.
 | 4 | Auth and Make Picks | **complete** |
 | 5 | League Board, Week Results, My Picks History | **complete** |
 | 6 | Audit log end to end, then the admin panel | **complete** (one gap, below) |
+| 6b | Weekly digest email and `LOG_ANCHOR.md` commit job | **complete** |
 | 7 | Deploy, cron, prior-season dry run | not started |
 
 ## Getting started
@@ -467,10 +468,10 @@ under an advisory lock, and there is a test that a failed write leaves no gap.
 2. **The database refuses.** A `BEFORE UPDATE OR DELETE` trigger raises unconditionally — for the
    owner too — and a restricted `loser_survivor_app` role holds `INSERT, SELECT` and nothing else.
    Verified on PostgreSQL 15: grants are exactly `INSERT, SELECT`.
-3. **External anchoring — Phase 6b.** Layers 1 and 2 do not stop the admin, who holds the owner
-   credentials and can rewrite the whole chain. There is a test that does exactly that, and it
-   shows the rewritten log verifying cleanly while its head hash no longer matches what a member
-   wrote down. That is the gap the weekly digest closes.
+3. **External anchoring — the layer that counts.** Layers 1 and 2 do not stop the admin, who
+   holds the owner credentials and can rewrite the whole chain. There is a test that does exactly
+   that, and it shows the rewritten log verifying cleanly while its head hash no longer matches
+   what a member wrote down. The `weeklyDigest` job closes that gap — see below.
 
 ### Verification
 
@@ -508,6 +509,50 @@ admin later approves, with both actors recorded.
 Refusing is the safe direction: nothing takes effect without the second admin either way. But it
 is less useful than the spec asks for, and the default is `false`, so most leagues never meet it.
 Building the queue needs a table for pending actions and an approval screen; say the word.
+
+## Anchoring the log (§7.3 layer 3)
+
+> "Do not skip this. Without it the hash chain is decorative."
+
+`npm run job -- weeklyDigest` emails **every** member — including ones who bought no picks, since
+a member with nothing at stake is still a witness — and writes a row to `LOG_ANCHOR.md`.
+
+The digest contains every admin action of the past week in plain English with the before and after
+**inside the sentence** ("Dana Okafor changed Marcus Bell's pick count from 8 to 10"), the reason
+they typed, the chain head in full, and §7.3's one-liner: *"Compare this hash to the one shown on
+the League Board."* It sends even in a week when nothing happened, because the anchor is the point,
+not the news.
+
+### A bug worth recording
+
+The first version emailed the head as it stood and *then* logged the job — which advanced the head
+by one. A member following the instruction would have compared `#15` against a board showing `#16`,
+found a mismatch, and reasonably concluded the log had been tampered with. **The job now writes its
+own entry first and anchors that**, so the emailed hash is exactly what the board shows at that
+moment. There is a test pinning it.
+
+### Checking an older email
+
+The board's head moves every time anything happens, so comparing against it only works the day the
+digest lands. The League Log therefore has a **"check a hash from a digest email"** box: paste the
+entry number and hash from any old email and it says whether that entry still has that hash,
+whether it has been altered, or whether it has been removed entirely. Without it the anchor is only
+usable by someone willing to recompute sha256 by hand.
+
+### Configuration
+
+| Variable | Effect |
+|---|---|
+| `RESEND_API_KEY`, `MAIL_FROM` | Real email. Unset, the console mailer prints to the terminal. |
+| `GITHUB_TOKEN`, `GITHUB_REPOSITORY` | Commits `LOG_ANCHOR.md` through the GitHub contents API. |
+
+Without the GitHub variables the anchor is written to the working tree only, carries no independent
+timestamp, and **the job warns about it on every run and reports failure** — §7.3 is explicit that
+this trail matters, so its absence is said out loud rather than left to be noticed.
+
+`LOG_ANCHOR.md` is appended to, never rewritten, so the repository's own history accumulates every
+head the league has ever had, each with a commit timestamp GitHub records independently. That is
+the second trail: an admin can rewrite the database, but not eight inboxes and a git history.
 
 ## Deferred deliberately
 
