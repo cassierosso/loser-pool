@@ -34,6 +34,12 @@ export const selectionResultEnum = pgEnum("selection_result", [
   "void",
 ]);
 
+/**
+ * SS6. A season is active until it resolves; admin_decides freezes it in
+ * pending_admin, where no week may open until the admin answers.
+ */
+export const seasonStatusEnum = pgEnum("season_status", ["active", "pending_admin", "closed"]);
+
 export const weekStatusEnum = pgEnum("week_status", [
   "upcoming",
   "open",
