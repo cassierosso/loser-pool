@@ -36,12 +36,29 @@ export const USER_AGENT = "loser-survivor/1.0 (private NFL pool; contact league 
 /** SS3: cache scoreboard responses for at least 60 seconds. */
 export const DEFAULT_CACHE_TTL_MS = 60_000;
 
+/**
+ * ESPN blocks bursts with a 403 that persists for minutes, not seconds.
+ *
+ * The sync jobs ask for one or two weeks and never notice. A backfill does --
+ * replaying a completed season is 22 requests, and doing that flat out gets the
+ * caller blocked partway through and left with a half-imported season. Hence a
+ * floor on the gap between requests, and a backoff that treats 403 as
+ * "slow down" rather than as "give up".
+ */
+export const DEFAULT_MIN_REQUEST_INTERVAL_MS = 1_200;
+export const DEFAULT_MAX_RETRIES = 4;
+
 export interface EspnProviderOptions {
   /** Injectable so tests read recorded fixtures and never touch the network. */
   fetchImpl?: typeof fetch;
   cacheTtlMs?: number;
   now?: () => number;
   requestTimeoutMs?: number;
+  /** Minimum gap between outbound requests. Zero disables throttling. */
+  minRequestIntervalMs?: number;
+  maxRetries?: number;
+  /** Injectable so tests do not actually sleep. */
+  sleepImpl?: (ms: number) => Promise<void>;
 }
 
 interface CacheEntry {
@@ -153,29 +170,72 @@ export function createEspnProvider(options: EspnProviderOptions = {}): ScheduleP
   const ttl = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
   const now = options.now ?? (() => Date.now());
   const timeoutMs = options.requestTimeoutMs ?? 15_000;
+  const minInterval = options.minRequestIntervalMs ?? DEFAULT_MIN_REQUEST_INTERVAL_MS;
+  const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
+  const sleep =
+    options.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const cache = new Map<string, CacheEntry>();
 
-  async function getJson(url: string): Promise<unknown> {
-    const cached = cache.get(url);
-    if (cached && cached.expiresAt > now()) return cached.payload;
+  /** Serialises outbound requests and keeps them a minimum interval apart. */
+  let queue: Promise<unknown> = Promise.resolve();
+  // Negative infinity so the FIRST request goes out immediately; the interval
+  // is a gap between requests, not a delay before starting.
+  let lastRequestAt = Number.NEGATIVE_INFINITY;
 
-    let response: Response;
+  async function throttled<T>(work: () => Promise<T>): Promise<T> {
+    const run = queue.then(async () => {
+      const wait = minInterval - (now() - lastRequestAt);
+      if (wait > 0) await sleep(wait);
+      lastRequestAt = now();
+      return work();
+    });
+    // Keep the chain alive even when a request rejects.
+    queue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  async function fetchOnce(url: string): Promise<Response> {
     try {
-      response = await fetchImpl(url, {
+      return await fetchImpl(url, {
         signal: AbortSignal.timeout(timeoutMs),
         headers: { accept: "application/json", "user-agent": USER_AGENT },
       });
     } catch (error) {
       throw new ProviderError(`ESPN request failed: ${url}`, error);
     }
+  }
 
-    if (!response.ok) {
-      throw new ProviderError(`ESPN returned ${response.status} for ${url}`);
+  async function getJson(url: string): Promise<unknown> {
+    const cached = cache.get(url);
+    if (cached && cached.expiresAt > now()) return cached.payload;
+
+    let lastStatus = 0;
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      const response = await throttled(() => fetchOnce(url));
+
+      if (response.ok) {
+        const payload = (await response.json()) as unknown;
+        cache.set(url, { expiresAt: now() + ttl, payload });
+        return payload;
+      }
+
+      lastStatus = response.status;
+
+      // 403 is ESPN's rate limit as well as its refusal, and 429 is explicit.
+      // Anything else is a real failure and retrying only wastes time.
+      const retryable = response.status === 403 || response.status === 429 || response.status >= 500;
+      if (!retryable || attempt === maxRetries) break;
+
+      await sleep(minInterval * 2 ** (attempt + 1));
     }
 
-    const payload = (await response.json()) as unknown;
-    cache.set(url, { expiresAt: now() + ttl, payload });
-    return payload;
+    throw new ProviderError(
+      `ESPN returned ${lastStatus} for ${url}` +
+        (lastStatus === 403 ? " (rate limited; slow the request rate down)" : ""),
+    );
   }
 
   return {

@@ -1,0 +1,18 @@
+# SS7.3 layer 3 -- the weekly digest and the LOG_ANCHOR.md trail.
+#
+# Tuesday morning ET, once Monday night football has been graded, so the digest
+# describes a settled week. The job refuses to send twice in seven days, so a
+# retry or a manual run costs nothing.
+name: weeklyDigest
+
+on:
+  schedule:
+    - cron: "0 14 * * 2"
+  workflow_dispatch:
+
+jobs:
+  call:
+    uses: ./.github/workflows/_job.yml
+    with:
+      job: weeklyDigest
+    secrets: inherit

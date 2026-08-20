@@ -91,5 +91,10 @@ export function createFixtureFetch(options: FixtureFetchOptions = {}): typeof fe
 }
 
 export function createFixtureProvider(options: FixtureFetchOptions = {}): ScheduleProvider {
-  return createEspnProvider({ fetchImpl: createFixtureFetch(options), cacheTtlMs: 0 });
+  return createEspnProvider({
+    fetchImpl: createFixtureFetch(options),
+    cacheTtlMs: 0,
+    // Fixtures are local files; throttling them only slows the suite down.
+    minRequestIntervalMs: 0,
+  });
 }

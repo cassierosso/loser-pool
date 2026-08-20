@@ -1,0 +1,17 @@
+# SS8 job 3 -- gradeWeek.
+#
+# Runs hourly and no-ops unless every non-canceled game in the week is final.
+# Safe to run twice by design, so an overlapping run costs nothing.
+name: gradeWeek
+
+on:
+  schedule:
+    - cron: "20 * * * *"
+  workflow_dispatch:
+
+jobs:
+  call:
+    uses: ./.github/workflows/_job.yml
+    with:
+      job: gradeWeek
+    secrets: inherit

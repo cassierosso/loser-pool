@@ -1,0 +1,20 @@
+# SS8 -- lockWeek "fires at lock_at".
+#
+# Cron cannot know lock_at, so this polls every 15 minutes and the job itself
+# decides whether a week is actually due. Being late here is worse than being
+# early: picks stay open past the deadline until it runs. validateSelection
+# refuses late submissions regardless, so a delay cannot let anyone sneak a
+# pick in -- it only delays the reveal.
+name: lockWeek
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  call:
+    uses: ./.github/workflows/_job.yml
+    with:
+      job: lockWeek
+    secrets: inherit

@@ -1,0 +1,15 @@
+# SS8 job 1 -- syncSchedule. "Daily, and on demand."
+name: syncSchedule
+
+on:
+  schedule:
+    # 09:00 UTC, comfortably after any game has finished anywhere in the US.
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+jobs:
+  call:
+    uses: ./.github/workflows/_job.yml
+    with:
+      job: syncSchedule
+    secrets: inherit

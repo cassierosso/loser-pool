@@ -1,0 +1,30 @@
+# SS8 job 2 -- syncResults.
+#
+# "Every 30 min during game windows (Thu 6pm-Fri 2am, Sat 11am-Sun 2am in the
+# postseason, Sun 11am-Tue 4am ET), hourly otherwise."
+#
+# GitHub Actions cron is UTC and has no notion of daylight saving, so these
+# windows are widened to cover both EST (UTC-5) and EDT (UTC-4) rather than
+# drifting an hour twice a season. Cron here is also best-effort: runs can be
+# delayed under load, which is why every job is idempotent.
+name: syncResults
+
+on:
+  schedule:
+    - cron: "*/30 22-23 * * 4"   # Thu evening ET
+    - cron: "*/30 0-7 * * 5"     # into Friday morning UTC
+    - cron: "*/30 15-23 * * 6"   # Sat, for postseason windows
+    - cron: "*/30 0-7 * * 0"     # into Sunday morning UTC
+    - cron: "*/30 15-23 * * 0"   # Sunday afternoon/evening ET
+    - cron: "*/30 0-9 * * 1"     # Sunday night into Monday morning UTC
+    - cron: "*/30 22-23 * * 1"   # Monday night football
+    - cron: "*/30 0-9 * * 2"     # into Tuesday morning UTC
+    - cron: "0 * * * *"          # hourly the rest of the time
+  workflow_dispatch:
+
+jobs:
+  call:
+    uses: ./.github/workflows/_job.yml
+    with:
+      job: syncResults
+    secrets: inherit

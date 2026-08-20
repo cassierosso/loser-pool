@@ -34,7 +34,9 @@ export async function createDatabase(url?: string): Promise<DatabaseHandle> {
     };
   }
 
-  const client = postgres(target.url, { max: 1 });
+  // Notices are chatter ("schema does not exist, skipping"); real problems
+  // arrive as errors.
+  const client = postgres(target.url, { max: 1, onnotice: () => {} });
   return {
     db: drizzlePostgres(client, { schema }),
     kind: "postgres",

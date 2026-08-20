@@ -1,0 +1,58 @@
+# Shared caller for the SS8 job endpoints.
+#
+# Every job is an HTTP endpoint behind a CRON_SECRET bearer token, so the
+# workflows here are thin: they call one URL and interpret the status.
+#
+#   200  the job ran
+#   409  the job could not complete -- surfaced as a warning, not a failure,
+#        because "this week has a postponed game and cannot be graded yet" is a
+#        real state that would otherwise turn the schedule red every hour
+#   4xx  configuration is wrong (bad token, unknown job): fail
+#   5xx  something broke: fail
+name: Run a league job
+
+on:
+  workflow_call:
+    inputs:
+      job:
+        required: true
+        type: string
+    secrets:
+      APP_URL:
+        required: true
+      CRON_SECRET:
+        required: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Call ${{ inputs.job }}
+        run: |
+          set -uo pipefail
+          url="${APP_URL%/}/api/jobs/${JOB}"
+          body=$(mktemp)
+          status=$(curl -sS -X POST "$url" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -o "$body" -w '%{http_code}' --max-time 300)
+
+          echo "HTTP $status"
+          cat "$body"
+          echo
+
+          summary=$(python3 -c "import json,sys;print(json.load(open('$body')).get('summary',''))" 2>/dev/null || echo "")
+          echo "### ${JOB}: HTTP $status" >> "$GITHUB_STEP_SUMMARY"
+          echo "$summary" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$status" = "200" ]; then exit 0; fi
+          if [ "$status" = "409" ]; then
+            echo "::warning title=${JOB} could not complete::$summary"
+            exit 0
+          fi
+          echo "::error title=${JOB} failed::HTTP $status"
+          exit 1
+        env:
+          JOB: ${{ inputs.job }}
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

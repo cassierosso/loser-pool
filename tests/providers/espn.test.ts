@@ -197,12 +197,89 @@ describe("caching (SS3: at least 60 seconds)", () => {
 });
 
 describe("failure handling", () => {
-  it("throws a ProviderError on a non-200", async () => {
+  it("throws a ProviderError once the retries are exhausted", async () => {
+    let calls = 0;
     const provider = createEspnProvider({
-      fetchImpl: (async () => new Response("nope", { status: 503 })) as typeof fetch,
+      fetchImpl: (async () => {
+        calls += 1;
+        return new Response("nope", { status: 503 });
+      }) as typeof fetch,
+      minRequestIntervalMs: 0,
+      maxRetries: 2,
+      sleepImpl: async () => {},
     });
 
     await expect(provider.getWeekGames(2024, 2, 5)).rejects.toBeInstanceOf(ProviderError);
+    expect(calls).toBe(3); // the first attempt plus two retries
+  });
+
+  it("retries a 403, because that is how ESPN says slow down", async () => {
+    // Found the hard way: 18 rapid requests earned a 403 that lasted minutes.
+    // A backfill has to ride that out rather than abandon a half-imported
+    // season.
+    let calls = 0;
+    const provider = createEspnProvider({
+      fetchImpl: (async () => {
+        calls += 1;
+        return calls < 3
+          ? new Response("Access Denied", { status: 403 })
+          : new Response(JSON.stringify({ events: [] }), { status: 200 });
+      }) as typeof fetch,
+      minRequestIntervalMs: 0,
+      sleepImpl: async () => {},
+    });
+
+    expect(await provider.getWeekGames(2024, 2, 5)).toEqual([]);
+    expect(calls).toBe(3);
+  });
+
+  it("says so when it gives up on a rate limit", async () => {
+    const provider = createEspnProvider({
+      fetchImpl: (async () => new Response("Access Denied", { status: 403 })) as typeof fetch,
+      minRequestIntervalMs: 0,
+      maxRetries: 1,
+      sleepImpl: async () => {},
+    });
+
+    await expect(provider.getWeekGames(2024, 2, 5)).rejects.toThrow(/rate limited/);
+  });
+
+  it("does not retry a 404, which retrying cannot fix", async () => {
+    let calls = 0;
+    const provider = createEspnProvider({
+      fetchImpl: (async () => {
+        calls += 1;
+        return new Response("no such week", { status: 404 });
+      }) as typeof fetch,
+      minRequestIntervalMs: 0,
+      sleepImpl: async () => {},
+    });
+
+    await expect(provider.getWeekGames(2024, 2, 5)).rejects.toBeInstanceOf(ProviderError);
+    expect(calls).toBe(1);
+  });
+
+  it("keeps requests a minimum interval apart", async () => {
+    const at: number[] = [];
+    let clock = 0;
+    const provider = createEspnProvider({
+      fetchImpl: (async () => {
+        at.push(clock);
+        return new Response(JSON.stringify({ events: [] }), { status: 200 });
+      }) as typeof fetch,
+      cacheTtlMs: 0,
+      minRequestIntervalMs: 1000,
+      now: () => clock,
+      sleepImpl: async (ms: number) => {
+        clock += ms;
+      },
+    });
+
+    await provider.getWeekGames(2024, 2, 1);
+    await provider.getWeekGames(2024, 2, 2);
+    await provider.getWeekGames(2024, 2, 3);
+
+    expect(at).toEqual([0, 1000, 2000]);
   });
 
   it("throws when an event has the wrong number of competitors", async () => {
