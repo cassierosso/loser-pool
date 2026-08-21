@@ -1,0 +1,44 @@
+name: Post-deploy health
+
+# Catches the failure mode that took the site down once: a build deployed ahead
+# of its migration, which is green everywhere until a member cannot sign in.
+# /api/health returns 503 while the database is missing migrations the build
+# needs, so this step goes red in a place somebody reads.
+
+on:
+  workflow_run:
+    workflows: ["*"]
+    types: [completed]
+  deployment_status:
+  workflow_dispatch:
+
+jobs:
+  check:
+    # Only once a deployment actually reports success.
+    if: github.event_name != 'deployment_status' || github.event.deployment_status.state == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check schema state against the deployed build
+        run: |
+          URL="${{ secrets.APP_URL }}"
+          if [ -z "$URL" ]; then
+            echo "APP_URL secret is not set; cannot check the deployment."
+            exit 1
+          fi
+
+          echo "Checking $URL/api/health"
+          BODY=$(curl -sS --max-time 30 -w '\n%{http_code}' "$URL/api/health") || {
+            echo "Could not reach the deployment."
+            exit 1
+          }
+
+          CODE=$(echo "$BODY" | tail -1)
+          JSON=$(echo "$BODY" | sed '$d')
+          echo "$JSON"
+
+          if [ "$CODE" != "200" ]; then
+            echo ""
+            echo "::error::Deployment is unhealthy (HTTP $CODE). If migrations are pending, run 'npm run db:migrate' against production."
+            exit 1
+          fi
+          echo "Healthy."
