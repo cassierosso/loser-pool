@@ -1,3 +1,4 @@
+import { AdminLinkNotice } from "@/components/admin-link-notice";
 import { AppShell } from "@/components/app-shell";
 import { requireUser } from "@/lib/auth/current-user";
 import { getDatabase } from "@/lib/db/client";
@@ -49,6 +50,7 @@ export default async function PicksPage() {
 
   return (
     <AppShell title="Make Picks" subtitle={user.displayName} current="/picks">
+      <AdminLinkNotice userId={user.id} />
 
       {user.picksPurchased === 0 ? (
         <Notice tone="warn" title="You don't have any picks yet">

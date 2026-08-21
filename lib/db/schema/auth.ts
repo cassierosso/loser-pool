@@ -23,6 +23,17 @@ export const loginTokens = pgTable(
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     /** Set the moment the link is used; enforced atomically so it is single-use. */
     consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    /**
+     * The admin who minted this link, or null when the member requested it
+     * themselves.
+     *
+     * An invite link an admin can copy is a link an admin can USE -- it signs
+     * them in as that member, with their picks. That power cannot be designed
+     * away while the feature exists, so instead it is made impossible to use
+     * quietly: minting is logged, consuming an admin-minted link is logged
+     * separately, and the member themselves is told it happened.
+     */
+    createdByUserId: uuid("created_by_user_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

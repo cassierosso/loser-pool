@@ -603,6 +603,31 @@ Two things that were fine at eight and break at sixty, both fixed:
 - **Vercel's default function timeout is 10 seconds.** Sixty throttled sends take over half a
   minute, so the job would have been cut off mid-send. `maxDuration` is now 300.
 
+## Getting people in without email
+
+A league can run before it has a sending domain. The admin roster has a **sign-in link** button
+that mints the same single-use token the emails carry, to be handed over by text, group chat, or in
+person. Once someone is in they set a password and never need a link again.
+
+**This is the most dangerous action in the application.** The link signs its holder in *as* that
+member — their picks, their history, their ability to submit — and §7 exists precisely because the
+admin is also a competitor. That power cannot be designed away while the feature exists. So it is
+made impossible to use quietly:
+
+- **Minting is logged** publicly, with a typed reason, flagged `self_affecting` when an admin mints
+  one for their own account. The token itself is never written to the log — it is world-readable
+  within the league, and an entry containing a working credential would hand everyone the keys.
+- **Using it is logged separately**, naming the admin who minted it.
+- **The member is told on their own screen**: "A sign-in link was created for your account… if that
+  wasn't you, say so."
+
+That last one is what makes the pair safe enough to ship. An admin who mints a link "for Dave" and
+walks through it themselves leaves two public entries *and* a notice on Dave's screen — and Dave
+knows perfectly well whether he signed in that day.
+
+Invite links last 72 hours rather than 15 minutes, because one pasted into a group chat on Thursday
+may not be opened until Sunday, and a dead link is how somebody gives up on joining.
+
 ## Deferred deliberately
 
 - **The §7 audit log is Phase 6**, by decision. Provisioning already emits fully formed audit

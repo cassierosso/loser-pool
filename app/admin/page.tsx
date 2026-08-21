@@ -21,6 +21,7 @@ import { JOB_NAMES } from "@/lib/jobs";
 import { formatKickoff } from "@/lib/time";
 import { and, desc, eq } from "drizzle-orm";
 
+import { InviteLinkButton } from "./invite-link";
 import { AdminForm, inputClass } from "./admin-form";
 
 export const dynamic = "force-dynamic";
@@ -115,6 +116,11 @@ export default async function AdminPage() {
                   {entry.paymentNote ? (
                     <span className="block text-[11px] text-neutral-500">{entry.paymentNote}</span>
                   ) : null}
+                  {/* SS7: a way in that does not need email. Logged twice and
+                      disclosed to the member -- see lib/admin/users.ts. */}
+                  <span className="mt-1 block">
+                    <InviteLinkButton userId={entry.userId} displayName={entry.displayName} />
+                  </span>
                 </th>
                 <td className="px-2 py-2 text-xs text-neutral-400">{entry.paymentStatus}</td>
                 <td className="px-2 py-2 text-right tabular-nums">{entry.picksPurchased}</td>

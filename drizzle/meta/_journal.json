@@ -50,6 +50,13 @@
       "when": 1787319579872,
       "tag": "0006_passwords",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787324989214,
+      "tag": "0007_invite_links",
+      "breakpoints": true
     }
   ]
 }

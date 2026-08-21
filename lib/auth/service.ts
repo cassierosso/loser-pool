@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
 
 import type { Database } from "@/lib/db/client";
 import { leagues, loginTokens, sessions, users, type UserRow } from "@/lib/db/schema";
@@ -8,6 +8,7 @@ import { hashPassword, lockoutMsFor, validatePassword, verifyPassword } from "./
 import {
   generateToken,
   hashToken,
+  INVITE_LINK_TTL_MS,
   LOGIN_TOKEN_TTL_MS,
   MAX_ACTIVE_TOKENS_PER_USER,
   SESSION_REFRESH_AFTER_MS,
@@ -159,7 +160,14 @@ export async function requestLoginLink(
 }
 
 export type ConsumeResult =
-  | { ok: true; sessionToken: string; user: UserRow; expiresAt: Date }
+  | {
+      ok: true;
+      sessionToken: string;
+      user: UserRow;
+      expiresAt: Date;
+      /** Set when the link was minted by an admin rather than requested. */
+      mintedByUserId: string | null;
+    }
   | { ok: false; code: "invalid" | "expired" | "used" };
 
 /**
@@ -213,7 +221,13 @@ export async function consumeLoginToken(
     lastSeenAt: now,
   });
 
-  return { ok: true, sessionToken, user, expiresAt };
+  return {
+    ok: true,
+    sessionToken,
+    user,
+    expiresAt,
+    mintedByUserId: existing.createdByUserId ?? null,
+  };
 }
 
 export async function resolveSession(
@@ -378,4 +392,75 @@ export async function clearPassword(db: Database, userId: string): Promise<void>
     .update(users)
     .set({ passwordHash: null, passwordSetAt: null })
     .where(eq(users.id, userId));
+}
+
+
+/**
+ * Mints a sign-in link for another member, for an admin to hand over directly.
+ *
+ * Exists because email is not always available -- no verified sending domain,
+ * or simply a league that communicates in a group chat. The link is the same
+ * single-use token the emails carry.
+ *
+ * This is the most dangerous thing an admin can do in this application. The
+ * link signs the holder in AS that member: their picks, their history, their
+ * ability to submit. SS7 exists because the admin is also a competitor, and
+ * this hands them a key to everyone's front door.
+ *
+ * It is therefore never quiet. Minting is logged; consuming is logged
+ * separately with the admin who minted it named; and the member is shown a
+ * notice on their own screen. If an admin uses one of these to peek at a rival's
+ * picks, the rival finds out and so does everyone reading the log.
+ */
+export async function createInviteLink(
+  db: Database,
+  input: { userId: string; createdByUserId: string; baseUrl: string },
+  options: { now?: Date } = {},
+): Promise<{ ok: true; url: string; expiresAt: Date } | { ok: false; message: string }> {
+  const now = options.now ?? new Date();
+
+  const [user] = await db.select().from(users).where(eq(users.id, input.userId)).limit(1);
+  if (!user) return { ok: false, message: "No such member." };
+  if (user.deactivatedAt) return { ok: false, message: "That account is no longer active." };
+
+  const raw = generateToken();
+  const expiresAt = new Date(now.getTime() + INVITE_LINK_TTL_MS);
+
+  await db.insert(loginTokens).values({
+    userId: user.id,
+    tokenHash: hashToken(raw),
+    expiresAt,
+    createdByUserId: input.createdByUserId,
+  });
+
+  return {
+    ok: true,
+    url: `${input.baseUrl.replace(/\/$/, "")}/api/auth/callback?token=${encodeURIComponent(raw)}`,
+    expiresAt,
+  };
+}
+
+/**
+ * Whether this member has been signed in through a link an admin minted, and
+ * has not yet been told. Drives the notice on their own screen.
+ */
+export async function pendingAdminLinkNotice(
+  db: Database,
+  userId: string,
+): Promise<{ createdAt: Date; adminName: string | null } | null> {
+  const [row] = await db
+    .select({ createdAt: loginTokens.createdAt, adminName: users.displayName })
+    .from(loginTokens)
+    .leftJoin(users, eq(users.id, loginTokens.createdByUserId))
+    .where(
+      and(
+        eq(loginTokens.userId, userId),
+        isNotNull(loginTokens.createdByUserId),
+        isNotNull(loginTokens.consumedAt),
+      ),
+    )
+    .orderBy(desc(loginTokens.createdAt))
+    .limit(1);
+
+  return row ?? null;
 }

@@ -1,5 +1,7 @@
 "use server";
 
+import { headers } from "next/headers";
+
 import { revalidatePath } from "next/cache";
 
 import {
@@ -8,6 +10,7 @@ import {
   setPaymentInfo,
   setPicksPurchased,
   setSlotStatus,
+  issueInviteLink,
   type AdminActor,
 } from "@/lib/admin";
 import { clearChainStatusCache } from "@/lib/audit/badge";
@@ -231,4 +234,52 @@ export async function resolvePlayoffAction(
   return result.ok
     ? done(`Playoff decision recorded: ${result.value.choice}.`)
     : { status: "error", message: result.error.message };
+}
+
+
+export interface InviteLinkState {
+  status: "idle" | "created" | "error";
+  message: string;
+  url?: string;
+  expiresAt?: string;
+}
+
+/**
+ * SS7 -- minting a sign-in link for a member, for handing over directly.
+ *
+ * Useful when email is not available; dangerous because the link signs its
+ * holder in as that member. Logged on mint, logged again on use, and disclosed
+ * to the member on their own screen.
+ */
+export async function issueInviteLinkAction(
+  _previous: InviteLinkState,
+  formData: FormData,
+): Promise<InviteLinkState> {
+  const admin = await requireAdmin();
+  const { db } = await getDatabase();
+
+  const userId = String(formData.get("userId") ?? "");
+  const reason = String(formData.get("reason") ?? "");
+
+  const store = await headers();
+  const host = store.get("x-forwarded-host") ?? store.get("host") ?? "localhost:3000";
+  const proto = store.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
+  const baseUrl = process.env.APP_URL?.trim() || `${proto}://${host}`;
+
+  const result = await issueInviteLink(
+    db,
+    { userId, baseUrl },
+    { actorUserId: admin.id, actorRole: "admin", reason },
+    createAuditRecorder(db),
+  );
+
+  if (!result.ok) return { status: "error", message: result.error.message };
+
+  revalidatePath("/admin");
+  return {
+    status: "created",
+    message: "Link created. It works once, expires in 72 hours, and is recorded in the league log.",
+    url: result.value.url,
+    expiresAt: result.value.expiresAt.toISOString(),
+  };
 }

@@ -1,5 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 
+import { createInviteLink } from "@/lib/auth/service";
+
 import type { AuditRecorder } from "@/lib/audit/port";
 import type { Database } from "@/lib/db/client";
 import { pickSlots, users, type UserRow } from "@/lib/db/schema";
@@ -202,4 +204,52 @@ export async function getRoster(db: Database): Promise<RosterEntry[]> {
     ...row,
     outOfSync: row.slotCount !== row.picksPurchased,
   }));
+}
+
+
+/**
+ * SS7.1 / SS7.6 -- minting a sign-in link for another member.
+ *
+ * The most powerful admin action in the app: the link signs its holder in as
+ * that member. Requires a typed reason like every other admin mutation, and is
+ * flagged self_affecting when an admin mints one for their own account.
+ */
+export async function issueInviteLink(
+  db: Database,
+  input: { userId: string; baseUrl: string },
+  actor: AdminActor,
+  recorder: AuditRecorder,
+): Promise<Result<{ url: string; expiresAt: Date }>> {
+  const reason = actor.reason?.trim() ?? "";
+  if (reason === "") {
+    return fail("reason_required", "A reason is required for every admin action.");
+  }
+
+  const [user] = await db.select().from(users).where(eq(users.id, input.userId)).limit(1);
+  if (!user) return fail("user_not_found", "No such member.");
+
+  const result = await createInviteLink(db, {
+    userId: input.userId,
+    createdByUserId: actor.actorUserId ?? input.userId,
+    baseUrl: input.baseUrl,
+  });
+
+  if (!result.ok) return fail("user_not_found", result.message);
+
+  await recorder.record({
+    actorUserId: actor.actorUserId,
+    actorRole: actor.actorRole,
+    action: "user.invite_link.create",
+    targetType: "user",
+    targetId: user.id,
+    targetLabel: user.displayName,
+    beforeJson: {},
+    // Never the token itself. The log is public to the whole league, and an
+    // entry containing a working credential would hand everyone the keys.
+    afterJson: { expiresAt: result.expiresAt.toISOString(), method: "admin_link" },
+    reason,
+    selfAffecting: actor.actorUserId === user.id,
+  });
+
+  return ok({ url: result.url, expiresAt: result.expiresAt });
 }

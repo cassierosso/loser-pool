@@ -42,3 +42,16 @@ export const SESSION_REFRESH_AFTER_MS = 24 * 60 * 60 * 1000;
 
 /** Cap on unconsumed links per user, per window, to stop mailbox flooding. */
 export const MAX_ACTIVE_TOKENS_PER_USER = 5;
+
+
+/**
+ * Admin-minted invite links live longer than emailed ones.
+ *
+ * Fifteen minutes is right for a link somebody just asked for and is watching
+ * their inbox for. An invite pasted into a group chat on Thursday might not be
+ * opened until Sunday, and a dead link is how someone gives up on joining. The
+ * tradeoff is a wider window in which a copied link still works, which is why
+ * it is single-use, logged when minted, logged when used, and disclosed to the
+ * member it belongs to.
+ */
+export const INVITE_LINK_TTL_MS = 72 * 60 * 60 * 1000;

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { createAuditRecorder } from "@/lib/audit/writer";
 import { consumeLoginToken } from "@/lib/auth/service";
 import { SESSION_COOKIE, sessionCookieOptions } from "@/lib/auth/session-cookie";
 import { getDatabase } from "@/lib/db/client";
