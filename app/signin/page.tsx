@@ -20,7 +20,7 @@ export default async function SignInPage({
         <h1 className="text-3xl font-semibold tracking-tight">Loser Survivor</h1>
         <p className="text-sm text-neutral-400">
           Pick the team you think will <strong className="text-neutral-100">lose</strong>.
-          No password — we email you a link.
+          Sign in with your password, or have a link emailed to you.
         </p>
       </header>
 
