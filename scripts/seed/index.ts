@@ -38,6 +38,8 @@ import {
   type FixtureTeam,
 } from "./schedule";
 
+import { assertLocalDatabase } from "../guard";
+
 /**
  * Seeds a complete fake season: 32 real teams, a structurally valid 272-game
  * regular season, the full postseason bracket with the Pro Bowl week skipped,
@@ -404,6 +406,8 @@ async function seedSelections(db: Database, context: SelectionSeedContext): Prom
 }
 
 async function main(): Promise<void> {
+  assertLocalDatabase("seed the fixture season");
+
   loadEnv();
   const args = parseArgs(process.argv.slice(2));
   const options: SeedOptions = {

@@ -5,6 +5,8 @@ import { games, leagues, pickSlots, selections, teams, users, weekStates } from 
 
 import { loadEnv } from "./env";
 
+import { assertLocalDatabase } from "./guard";
+
 /**
  * Deletes every row in foreign-key-safe order. Used by the seed so that seeding
  * is idempotent by construction rather than by upsert gymnastics.
@@ -26,6 +28,8 @@ export async function truncateAll(db: Database): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  assertLocalDatabase("reset the database");
+
   loadEnv();
   const handle = await createDatabase(process.env.DATABASE_URL_MIGRATOR ?? process.env.DATABASE_URL);
   try {

@@ -16,7 +16,8 @@
     "provision": "tsx scripts/provision.ts",
     "job": "tsx scripts/job.ts",
     "db:serve": "tsx scripts/db-serve.ts",
-    "dry-run": "tsx scripts/dry-run.ts"
+    "dry-run": "tsx scripts/dry-run.ts",
+    "bootstrap": "tsx scripts/bootstrap.ts"
   },
   "description": "NFL loser survivor pool",
   "dependencies": {
