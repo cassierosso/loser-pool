@@ -4,11 +4,13 @@ import type { Database } from "@/lib/db/client";
 import { leagues, loginTokens, sessions, users, type UserRow } from "@/lib/db/schema";
 import type { Mailer } from "@/lib/mail/types";
 
+import { hashPassword, lockoutMsFor, validatePassword, verifyPassword } from "./password";
 import {
   generateToken,
   hashToken,
   LOGIN_TOKEN_TTL_MS,
   MAX_ACTIVE_TOKENS_PER_USER,
+  SESSION_REFRESH_AFTER_MS,
   SESSION_TTL_MS,
 } from "./tokens";
 
@@ -232,6 +234,22 @@ export async function resolveSession(
   if (row.session.expiresAt.getTime() <= now.getTime()) return null;
   if (row.user.deactivatedAt) return null;
 
+  /**
+   * Slide the expiry forward for anyone still using the app. Without this every
+   * member is thrown out on a fixed schedule regardless of activity, which for
+   * a season-long league means the whole roster re-authenticating mid-season --
+   * quite possibly on the Sunday they least want to.
+   *
+   * Only written when it has actually moved, to keep this off the hot path of
+   * every page render.
+   */
+  if (now.getTime() - row.session.lastSeenAt.getTime() > SESSION_REFRESH_AFTER_MS) {
+    await db
+      .update(sessions)
+      .set({ lastSeenAt: now, expiresAt: new Date(now.getTime() + SESSION_TTL_MS) })
+      .where(eq(sessions.id, row.session.id));
+  }
+
   return row.user;
 }
 
@@ -243,4 +261,121 @@ export async function destroySession(db: Database, sessionToken: string): Promis
 export async function purgeExpiredAuthRows(db: Database, now: Date = new Date()): Promise<void> {
   await db.delete(sessions).where(sql`${sessions.expiresAt} <= ${now}`);
   await db.delete(loginTokens).where(sql`${loginTokens.expiresAt} <= ${now}`);
+}
+
+
+/**
+ * Password sign-in.
+ *
+ * Magic links remain the way in for anyone who has not set a password, and the
+ * recovery path for anyone who forgets one -- which is why there is no reset
+ * flow. See lib/auth/password.ts for why passwords exist at all.
+ */
+export type PasswordSignInResult =
+  | { ok: true; sessionToken: string; user: UserRow; expiresAt: Date }
+  | { ok: false; code: "invalid_credentials" | "locked" | "no_password"; message: string };
+
+export async function signInWithPassword(
+  db: Database,
+  input: { email: string; password: string },
+  options: { now?: Date } = {},
+): Promise<PasswordSignInResult> {
+  const now = options.now ?? new Date();
+  const email = normalizeEmail(input.email);
+
+  const user = await findUserByEmail(db, email);
+
+  /**
+   * Every failure below returns the SAME message. The login form must not
+   * become the enumeration oracle that requestLoginLink was carefully written
+   * not to be -- otherwise "no account with that address" tells a stranger
+   * exactly who is in the league.
+   */
+  const refuse = (code: "invalid_credentials" | "no_password" = "invalid_credentials") =>
+    ({
+      ok: false as const,
+      code,
+      message: "That email and password do not match. You can also sign in with an emailed link.",
+    });
+
+  if (!user || user.deactivatedAt) {
+    // Spend roughly the time a real verification costs, so the response time
+    // does not reveal whether the address exists.
+    await verifyPassword(input.password, await hashPassword("timing-equalisation"));
+    return refuse();
+  }
+
+  if (user.lockedUntil && user.lockedUntil.getTime() > now.getTime()) {
+    const minutes = Math.ceil((user.lockedUntil.getTime() - now.getTime()) / 60_000);
+    return {
+      ok: false,
+      code: "locked",
+      message: `Too many attempts. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}, or sign in with an emailed link instead.`,
+    };
+  }
+
+  if (!user.passwordHash) return refuse("no_password");
+
+  if (!(await verifyPassword(input.password, user.passwordHash))) {
+    const failed = user.failedLoginCount + 1;
+    const lockMs = lockoutMsFor(failed);
+
+    await db
+      .update(users)
+      .set({
+        failedLoginCount: failed,
+        lockedUntil: lockMs > 0 ? new Date(now.getTime() + lockMs) : null,
+      })
+      .where(eq(users.id, user.id));
+
+    return refuse();
+  }
+
+  await db
+    .update(users)
+    .set({ failedLoginCount: 0, lockedUntil: null })
+    .where(eq(users.id, user.id));
+
+  const sessionToken = generateToken();
+  const expiresAt = new Date(now.getTime() + SESSION_TTL_MS);
+  await db.insert(sessions).values({
+    userId: user.id,
+    tokenHash: hashToken(sessionToken),
+    expiresAt,
+    lastSeenAt: now,
+  });
+
+  return { ok: true, sessionToken, user, expiresAt };
+}
+
+export type SetPasswordResult = { ok: true } | { ok: false; message: string };
+
+/** Setting or changing a password. Requires an existing session, not the old password. */
+export async function setPassword(
+  db: Database,
+  input: { userId: string; password: string },
+  options: { now?: Date } = {},
+): Promise<SetPasswordResult> {
+  const check = validatePassword(input.password);
+  if (!check.ok) return { ok: false, message: check.reason };
+
+  const now = options.now ?? new Date();
+  await db
+    .update(users)
+    .set({
+      passwordHash: await hashPassword(input.password),
+      passwordSetAt: now,
+      failedLoginCount: 0,
+      lockedUntil: null,
+    })
+    .where(eq(users.id, input.userId));
+
+  return { ok: true };
+}
+
+export async function clearPassword(db: Database, userId: string): Promise<void> {
+  await db
+    .update(users)
+    .set({ passwordHash: null, passwordSetAt: null })
+    .where(eq(users.id, userId));
 }

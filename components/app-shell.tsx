@@ -12,6 +12,7 @@ const LINKS = [
   { href: "/board", label: "League Board" },
   { href: "/results", label: "Week Results" },
   { href: "/history", label: "My Picks" },
+  { href: "/account", label: "Account" },
   // SS7.5: the League Log gets its own screen "linked from the main nav, not
   // buried in settings", and is readable by every member.
   { href: "/log", label: "League Log" },

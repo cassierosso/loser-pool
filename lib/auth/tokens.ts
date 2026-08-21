@@ -30,8 +30,15 @@ export function hashesEqual(a: string, b: string): boolean {
 /** SS10: a magic link is short-lived. Fifteen minutes is plenty for email. */
 export const LOGIN_TOKEN_TTL_MS = 15 * 60 * 1000;
 
-/** A session outlives a season's worth of Sunday afternoons. */
-export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * A session outlives a season. Ninety days with a sliding expiry means someone
+ * who checks in weekly is never logged out at all, which is the single biggest
+ * reduction in sign-in emails available to a league this size.
+ */
+export const SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+
+/** Only slide the expiry once a day; it need not be written on every render. */
+export const SESSION_REFRESH_AFTER_MS = 24 * 60 * 60 * 1000;
 
 /** Cap on unconsumed links per user, per window, to stop mailbox flooding. */
 export const MAX_ACTIVE_TOKENS_PER_USER = 5;

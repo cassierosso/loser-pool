@@ -554,6 +554,55 @@ this trail matters, so its absence is said out loud rather than left to be notic
 head the league has ever had, each with a commit timestamp GitHub records independently. That is
 the second trail: an admin can rewrite the database, but not eight inboxes and a git history.
 
+## Passwords — a deliberate departure from §10
+
+§10 specifies "Passwordless email magic link. No passwords stored." The league turned out to be
+**~60 people, not the handful the spec imagined**, and that changes the calculation.
+
+Email *volume* was never the binding constraint (roughly 320/month against Resend's free 3,000).
+The problem is friction against a hard deadline: a magic link means opening an email app, and the
+click frequently returns to a *different* browser than the one the member started in, so the
+session cookie lands somewhere useless. At eight people that is a curiosity. At sixty, five
+minutes before kickoff, it is a support queue — and the admin is also a competitor with their own
+picks to make.
+
+**So passwords were added alongside magic links, not instead of them.** The combination is
+strictly better than either alone:
+
+- Routine sign-in is instant and sends no email
+- **There is no "forgot password" flow**, because the magic link already is one — the same
+  single-use, 15-minute token, with nothing extra to build or to phish
+- Anyone who never sets a password keeps working exactly as before
+
+Sessions also became **90 days with a sliding expiry**, refreshed at most once a day. A member who
+checks in weekly is never logged out at all, which removes more sign-in emails than passwords do.
+
+### Security specifics
+
+`scrypt` from Node core — no dependency, memory-hard — with a 16-byte random salt per user and
+cost parameters stored alongside the hash so they can be raised later without invalidating
+anyone. Comparison is timing-safe.
+
+Failed attempts escalate a lockout (1 minute → 15 → 60) that **never becomes permanent**, because
+a member locked out on a Sunday still has the magic link. And every failure mode returns the
+*same* message: wrong password, unknown address, and no-password-set are indistinguishable, with
+a dummy hash computed on the unknown-address path so response timing does not leak either. The
+login form must not become the enumeration oracle that `requestLoginLink` was carefully written
+not to be.
+
+Password rules are length-only (10+). Character-class requirements mostly produce `P@ssw0rd1`,
+which is harder to remember and easier to crack than four ordinary words.
+
+## Sending to sixty people
+
+Two things that were fine at eight and break at sixty, both fixed:
+
+- **Resend rate limits at 2 requests/second.** The digest sent flat out, so the tail of the league
+  would have been silently rejected — meaning the members who most need the chain head are the
+  ones who never receive it. The Resend mailer now self-throttles.
+- **Vercel's default function timeout is 10 seconds.** Sixty throttled sends take over half a
+  minute, so the job would have been cut off mid-send. `maxDuration` is now 300.
+
 ## Deferred deliberately
 
 - **The §7 audit log is Phase 6**, by decision. Provisioning already emits fully formed audit

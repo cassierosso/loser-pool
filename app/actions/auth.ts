@@ -1,10 +1,20 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { destroySession, requestLoginLink } from "@/lib/auth/service";
-import { clearSessionCookie, readSessionToken } from "@/lib/auth/session-cookie";
+import {
+  destroySession,
+  requestLoginLink,
+  setPassword,
+  signInWithPassword,
+} from "@/lib/auth/service";
+import {
+  clearSessionCookie,
+  readSessionToken,
+  writeSessionCookie,
+} from "@/lib/auth/session-cookie";
 import { getDatabase } from "@/lib/db/client";
 import { createMailer } from "@/lib/mail";
 
@@ -60,4 +70,65 @@ export async function signOutAction(): Promise<void> {
   }
   await clearSessionCookie();
   redirect("/signin");
+}
+
+
+export interface PasswordSignInState {
+  status: "idle" | "error";
+  message: string;
+}
+
+/**
+ * Password sign-in. Magic links remain for joining and for anyone who has not
+ * set a password or has forgotten one -- which is why there is no reset flow.
+ */
+export async function passwordSignInAction(
+  _previous: PasswordSignInState,
+  formData: FormData,
+): Promise<PasswordSignInState> {
+  const email = String(formData.get("email") ?? "");
+  const password = String(formData.get("password") ?? "");
+
+  if (!email.includes("@") || password === "") {
+    return { status: "error", message: "Enter your email and password." };
+  }
+
+  const { db } = await getDatabase();
+  const result = await signInWithPassword(db, { email, password });
+
+  if (!result.ok) return { status: "error", message: result.message };
+
+  await writeSessionCookie(result.sessionToken, result.expiresAt);
+  redirect("/picks");
+}
+
+export interface SetPasswordState {
+  status: "idle" | "saved" | "error";
+  message: string;
+}
+
+export async function setPasswordAction(
+  _previous: SetPasswordState,
+  formData: FormData,
+): Promise<SetPasswordState> {
+  const { requireUser } = await import("@/lib/auth/current-user");
+  const user = await requireUser();
+
+  const password = String(formData.get("password") ?? "");
+  const confirm = String(formData.get("confirm") ?? "");
+
+  if (password !== confirm) {
+    return { status: "error", message: "Those two passwords do not match." };
+  }
+
+  const { db } = await getDatabase();
+  const result = await setPassword(db, { userId: user.id, password });
+
+  if (!result.ok) return { status: "error", message: result.message };
+
+  revalidatePath("/account");
+  return {
+    status: "saved",
+    message: "Password saved. You can sign in with it from now on — no email needed.",
+  };
 }

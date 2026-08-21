@@ -35,6 +35,16 @@ export const users = pgTable(
      */
     deactivatedAt: timestamp("deactivated_at", { withTimezone: true }),
     /**
+     * scrypt hash, or null for a member who signs in by magic link only.
+     * A departure from SS10, taken because 60 people cannot all be clicking
+     * email links five minutes before kickoff. See lib/auth/password.ts.
+     */
+    passwordHash: text("password_hash"),
+    passwordSetAt: timestamp("password_set_at", { withTimezone: true }),
+    /** Reset on any successful sign-in; drives the lockout backoff. */
+    failedLoginCount: integer("failed_login_count").notNull().default(0),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    /**
      * SS7.5: an admin action after lock raises a banner "until every member has
      * viewed the log screen once, or for seven days, whichever is longer". This
      * is how we know who has looked.

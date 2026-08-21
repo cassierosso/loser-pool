@@ -15,6 +15,14 @@ import { authorizeJobRequest, createJobContext, isJobName, runJob } from "@/lib/
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * The weekly digest emails every member, throttled to Resend's 2 requests per
+ * second. At 60 members that is well over half a minute, and Vercel's default
+ * function timeout is ten seconds -- which would cut the send off partway
+ * through, delivering the chain head to some of the league and not the rest.
+ */
+export const maxDuration = 300;
+
 export async function POST(
   request: Request,
   context: { params: Promise<{ job: string }> },
